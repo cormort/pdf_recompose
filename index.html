@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF 頁面重組工具 (最終版)</title>
+    <title>PDF 頁面重組工具 (專業目錄版)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
     <script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
@@ -751,7 +751,6 @@
 
                 let cleanedTitle = titleLineText;
 
-                // --- RULE 1: Preserve numbers followed by "年度" ---
                 if (!/^\d+\s*年度/.test(cleanedTitle.trim())) {
                     cleanedTitle = cleanedTitle.replace(/^[\d\s.\-•]+\s*/, '');
                 }
@@ -782,7 +781,6 @@
                     cleanedTitle = cleanedTitle.substring(0, earliestIndex + keywordLength);
                 }
 
-                // --- RULE 2: Remove ALL spaces from the final title ---
                 cleanedTitle = cleanedTitle.replace(/\s+/g, '');
 
                 if (cleanedTitle.length > 70) {
@@ -1174,8 +1172,37 @@
                     } else {
                         pageCounter++;
                         const title = item.firstLine;
-                        const text = `${pageCounter}. ${title.substring(0, 35)} ............ Page ${pageCounter}`;
-                        tocPage.drawText(text, { x: 70, y: yPosition, size: 12, font: customFont, color: rgb(0,0,0) });
+                        const pageNumStr = `${pageCounter}`;
+
+                        const leftMargin = 70;
+                        const rightMargin = 50;
+                        const fontSize = 12;
+                        const pageContentWidth = tocPage.getWidth() - leftMargin - rightMargin;
+
+                        const pageNumWidth = customFont.widthOfTextAtSize(pageNumStr, fontSize);
+                        
+                        let truncatedTitle = title;
+                        let titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize);
+                        const minDotSpace = 20;
+
+                        while (titleWidth + pageNumWidth + minDotSpace > pageContentWidth && truncatedTitle.length > 5) {
+                            truncatedTitle = truncatedTitle.slice(0, -2) + '…';
+                            titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize);
+                        }
+
+                        tocPage.drawText(truncatedTitle, { x: leftMargin, y: yPosition, size: fontSize, font: customFont, color: rgb(0,0,0) });
+                        tocPage.drawText(pageNumStr, { x: tocPage.getWidth() - rightMargin - pageNumWidth, y: yPosition, size: fontSize, font: customFont, color: rgb(0,0,0) });
+
+                        const dotWidth = customFont.widthOfTextAtSize('.', fontSize);
+                        const dotStartX = leftMargin + titleWidth + 5;
+                        const dotEndX = tocPage.getWidth() - rightMargin - pageNumWidth - 5;
+                        const availableDotSpace = dotEndX - dotStartX;
+
+                        if (availableDotSpace > dotWidth) {
+                            const numDots = Math.floor(availableDotSpace / dotWidth);
+                            const dotString = '.'.repeat(numDots);
+                            tocPage.drawText(dotString, { x: dotStartX, y: yPosition, size: fontSize, font: customFont, color: rgb(0,0,0), opacity: 0.5 });
+                        }
                         yPosition -= 20;
                     }
                 });
