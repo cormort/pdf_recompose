@@ -1066,7 +1066,7 @@
 
                 try {
                     progress.textContent = '正在下載中文字型...';
-                    const fontUrl = './fonts/NotoSansTC-Regular.otf';
+                    const fontUrl = './fonts/NotoSansTC-Regular.ttf';
                     const fontBytes = await fetch(fontUrl).then(res => res.arrayBuffer());
                     newPdf.registerFontkit(fontkit);
                     // --- 核心修正：加入 { subset: true } ---
