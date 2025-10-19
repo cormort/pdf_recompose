@@ -4,9 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PDF 頁面重組工具 (專業目錄版)</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-    <script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
+    
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -48,6 +46,7 @@
                 <label for="addEncryptCheckbox">🔒 啟用 PDF 加密 (儲存時會詢問密碼)</label>
             </div>
         </div>
+
         <button class="btn btn-success" id="generateBtn" onclick="generatePDF()">
             生成新的 PDF
         </button>
@@ -99,6 +98,6 @@
         </div>
     </div>
 
-    <script src="script.js"></script>
+    <script type="module" src="script.mjs"></script>
 </body>
 </html>
