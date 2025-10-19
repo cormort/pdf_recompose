@@ -9,6 +9,8 @@
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
     <script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
+    
+    <script src="https://unpkg.com/pdf-encryptor"></script>
 
     <link rel="stylesheet" href="style.css">
 </head>
@@ -34,7 +36,7 @@
         </div>
 
         <div class="note">
-            💡 提示：生成的 PDF 會保留原始文字，可以正常搜尋和複製。目錄使用思源黑體以支援中文顯示。
+            💡 提示：生成的 PDF 會保留原始文字，可以正常搜尋和複製。目錄使用思源黑體以支援中文顯示。加密使用 AES-256 標準。
         </div>
 
         <div class="progress" id="progress">
@@ -50,7 +52,7 @@
                 <input type="checkbox" id="addEncryptCheckbox">
                 <label for="addEncryptCheckbox">🔒 啟用 PDF 加密 (儲存時會詢問密碼)</label>
             </div>
-        </div>
+            </div>
 
         <button class="btn btn-success" id="generateBtn" onclick="generatePDF()">
             生成新的 PDF
