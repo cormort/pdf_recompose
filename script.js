@@ -673,20 +673,28 @@ window.onload = function() {
             let customFont;
 
             try {
-                progress.textContent = '正在下載中文字型...';
-                const fontUrl = '.fonts/NotoSansTC-Regular.ttf';
+                progress.textContent = '正在載入中文字型...';
+                
+                // ==========================================================
+                // ===             *** 字型載入修正 ***
+                // === 改為載入本地的 NotoSansTC-Regular.otf
+                // ==========================================================
+                const fontUrl = './fonts/NotoSansTC-Regular.ttf'; 
+                
                 const fontBytes = await fetch(fontUrl).then(res => {
-                    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                    if (!res.ok) throw new Error(`字型檔案 (${fontUrl}) 載入失敗！ status: ${res.status}`); // 更明確的錯誤
                     return res.arrayBuffer();
                 });
                 
                 // Check fontkit again
                 if (typeof fontkit === 'undefined') {
-                     console.warn("fontkit not loaded, using default font for TOC.");
-                     customFont = await newPdf.embedFont(StandardFonts.Helvetica);
+                     console.error("fontkit not loaded, cannot embed custom font."); // 變成錯誤，因為本地載入需要它
+                     throw new Error("fontkit 函式庫載入失敗");
                 } else {
                     newPdf.registerFontkit(fontkit); 
                     customFont = await newPdf.embedFont(fontBytes);
+                     progress.textContent = '中文字型載入成功!'; // Add success message
+                     await new Promise(resolve => setTimeout(resolve, 500)); // Short pause
                 }
             } catch (fontError) {
                 console.error("中文字型載入失敗:", fontError);
