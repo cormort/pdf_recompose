@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF 頁面重組工具 (中文支援修復版)</title>
+    <title>PDF 頁面重組工具 (智慧標題 v2)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
     <script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
@@ -736,6 +736,26 @@
                     }
                 }
                 
+                // --- NEW RULE: Truncate after special keywords ---
+                const specialKeywords = ["說明", "表", "情形"];
+                let earliestIndex = -1;
+                let keywordLength = 0;
+
+                for (const keyword of specialKeywords) {
+                    const currentIndex = cleanedTitle.indexOf(keyword);
+                    if (currentIndex !== -1) {
+                        if (earliestIndex === -1 || currentIndex < earliestIndex) {
+                            earliestIndex = currentIndex;
+                            keywordLength = keyword.length;
+                        }
+                    }
+                }
+
+                if (earliestIndex !== -1) {
+                    cleanedTitle = cleanedTitle.substring(0, earliestIndex + keywordLength);
+                }
+                // --- End of new rule ---
+
                 cleanedTitle = cleanedTitle.replace(/\s+/g, ' ').trim();
                 if (cleanedTitle.length > 70) {
                     cleanedTitle = cleanedTitle.substring(0, 70) + '...';
@@ -1069,7 +1089,6 @@
                     const fontUrl = './fonts/NotoSansTC-Regular.ttf';
                     const fontBytes = await fetch(fontUrl).then(res => res.arrayBuffer());
                     newPdf.registerFontkit(fontkit);
-                    // --- 核心修正：加入 { subset: true } ---
                     customFont = await newPdf.embedFont(fontBytes, { subset: true });
                 } catch (fontError) {
                     console.error("中文字型載入失敗:", fontError);
