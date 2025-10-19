@@ -6,7 +6,11 @@ import * as pdfjsLib from './pdf.mjs';
 
 // Import other libraries from CDN (ESM module versions)
 import { PDFDocument, rgb, StandardFonts } from 'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.esm.min.js';
-import fontkit from 'https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.esm.min.js';
+
+// ==========================================================
+// === 修正：更換為正確的 fontkit ESM 網址 (移除 .min) ===
+// ==========================================================
+import fontkit from 'https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.esm.js';
 
 // ==========================================================
 // === 變更 #2：設定 workerSrc (指向本地檔案) ===
@@ -259,68 +263,6 @@ function deleteSourcePage(fileIndex, pageIndex) {
         renderSourcePages();
         renderSelectedPages();
     }
-}
-
-function renderSourcePages() {
-    if (pdfFiles.length === 0) {
-        sourcePages.innerHTML = '<div class="empty-message">尚未載入任何 PDF 檔案</div>';
-        return;
-    }
-    sourcePages.innerHTML = pdfFiles.map((file, fileIndex) => {
-        const pagesHtml = viewMode === 'grid' 
-            ? `<div class="pages-grid">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'grid')).join('')}</div>`
-            : `<div class="pages-list">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'list')).join('')}</div>`;
-        return `<div class="pdf-file"><div class="pdf-file-header"><div class="pdf-file-name">${file.name}</div></div>${pagesHtml}</div>`;
-    }).join('');
-    pdfFiles.forEach((file, fileIndex) => {
-        file.pages.forEach((page, pageIndex) => {
-            const canvas = document.getElementById(`source_${fileIndex}_${pageIndex}`);
-            if (canvas) {
-                const ctx = canvas.getContext('2d');
-                canvas.width = page.canvas.width;
-                canvas.height = page.canvas.height;
-                ctx.drawImage(page.canvas, 0, 0);
-            }
-        });
-    });
-}
-
-function renderPageItem(fileIndex, pageIndex, type) {
-    const page = pdfFiles[fileIndex].pages[pageIndex];
-    const isSelected = selectedPages.some(p => p.type !== 'divider' && p.fileIndex === fileIndex && p.pageNum === page.pageNum);
-    const clickAction = isSourceEditMode ? '' : `onclick="togglePage(${fileIndex}, ${pageIndex}, event)"`;
-    
-    if (type === 'grid') {
-        return `
-            <div class="page-item ${isSelected ? 'selected' : ''}" ${clickAction}>
-                <button class="delete-btn" onclick="deleteSourcePage(${fileIndex}, ${pageIndex})">✕</button>
-                <canvas id="source_${fileIndex}_${pageIndex}"></canvas>
-                <div class="page-number">第 ${page.pageNum} 頁</div>
-            </div>`;
-    } else { // list
-        return `
-            <div class="page-list-item ${isSelected ? 'selected' : ''}" ${clickAction} title="${page.firstLine}">
-                <div class="page-list-text">${page.firstLine}</div>
-                <div class="page-list-number">第 ${page.pageNum} 頁</div>
-                <button class="delete-btn" onclick="deleteSourcePage(${fileIndex}, ${pageIndex})">刪除</button>
-            </div>`;
-    }
-}
-
-function getGlobalPageIndex(fileIndex, pageIndex) {
-    return pdfFiles.slice(0, fileIndex).reduce((acc, file) => acc + file.pages.length, 0) + pageIndex;
-}
-
-function getPageByGlobalIndex(globalIndex) {
-    let count = 0;
-    for (let fileIndex = 0; fileIndex < pdfFiles.length; fileIndex++) {
-        const file = pdfFiles[fileIndex];
-        if (globalIndex < count + file.pages.length) {
-            return { fileIndex, pageIndex: globalIndex - count };
-        }
-        count += file.pages.length;
-    }
-    return null;
 }
 
 // 讓函式可以在 HTML 中被呼叫 (因為 module 預設是獨立 scope)
@@ -590,10 +532,6 @@ window.generatePDF = async function() {
         progress.classList.remove('success', 'error');
         progress.classList.add('active');
         
-        // ==========================================================
-        // === 變更 #3：移除 const { PDFDocument... } = PDFLib; ===
-        // (因為已經在檔案頂端 import)
-        // ==========================================================
         const newPdf = await PDFDocument.create();
         let customFont;
 
@@ -602,9 +540,6 @@ window.generatePDF = async function() {
             const fontUrl = 'https://cdn.jsdelivr.net/gh/google/fonts/ofl/notosanstc/NotoSansTC-Regular.otf';
             const fontBytes = await fetch(fontUrl).then(res => res.arrayBuffer());
             
-            // ==========================================================
-            // === 變更 #4：確認 fontkit 已被 import 且可使用 ===
-            // ==========================================================
             newPdf.registerFontkit(fontkit); 
             customFont = await newPdf.embedFont(fontBytes);
         } catch (fontError) {
