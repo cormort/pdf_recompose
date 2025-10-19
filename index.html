@@ -5,15 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PDF 頁面重組工具 (專業目錄版)</title>
     
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.js"></script>
+    <script src="https://unpkg.com/pdfjs-dist@4.4.168/build/pdf.min.js"></script>
     
     <script>
-      // Ensure pdfjsLib exists before setting workerSrc
       if (typeof pdfjsLib !== 'undefined') {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.js';
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@4.4.168/build/pdf.worker.min.js';
       } else {
-        console.error("CRITICAL: pdfjsLib is not defined immediately after loading pdf.min.js!");
-        // Optionally display an error message to the user here
+        console.error("CRITICAL: pdfjsLib is not defined immediately after loading pdf.min.js from UNPKG!");
       }
     </script>
     
