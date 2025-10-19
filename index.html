@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF 頁面重組工具 (專業目錄版)</title>
+    <title>PDF 頁面重組工具 (最終版)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
     <script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
@@ -749,7 +749,13 @@
                     }
                 }
 
-                let cleanedTitle = titleLineText.replace(/^[\d\s.\-•]+\s*/, '');
+                let cleanedTitle = titleLineText;
+
+                // --- RULE 1: Preserve numbers followed by "年度" ---
+                if (!/^\d+\s*年度/.test(cleanedTitle.trim())) {
+                    cleanedTitle = cleanedTitle.replace(/^[\d\s.\-•]+\s*/, '');
+                }
+
                 const stopChars = ['一、', '二、', '（一）', '附註', '說明：', '中華民國'];
                 for (const char of stopChars) {
                     const pos = cleanedTitle.indexOf(char);
@@ -776,7 +782,9 @@
                     cleanedTitle = cleanedTitle.substring(0, earliestIndex + keywordLength);
                 }
 
-                cleanedTitle = cleanedTitle.replace(/\s+/g, ' ').trim();
+                // --- RULE 2: Remove ALL spaces from the final title ---
+                cleanedTitle = cleanedTitle.replace(/\s+/g, '');
+
                 if (cleanedTitle.length > 70) {
                     cleanedTitle = cleanedTitle.substring(0, 70) + '...';
                 }
@@ -861,7 +869,7 @@
 
         function deleteSourcePage(fileIndex, pageIndex) {
             const pageToDelete = pdfFiles[fileIndex].pages[pageIndex];
-            selectedPages = selectedPages.filter(p => !(p.fileIndex === fileIndex && p.pageNum === pageToDelete.pageNum));
+            selectedPages = selectedPages.filter(p => !(p.type !== 'divider' && p.fileIndex === fileIndex && p.pageNum === pageToDelete.pageNum));
             pdfFiles[fileIndex].pages.splice(pageIndex, 1);
             if (pdfFiles[fileIndex].pages.length === 0) {
                 removeFile(fileIndex);
@@ -1124,7 +1132,8 @@
         }
 
         async function generatePDF() {
-            if (selectedPages.filter(p => p.type !== 'divider').length === 0) {
+            const pageItems = selectedPages.filter(p => p.type !== 'divider');
+            if (pageItems.length === 0) {
                 progress.textContent = '⚠️ 請至少選擇一個頁面';
                 progress.classList.add('active', 'error');
                 setTimeout(() => progress.classList.remove('active', 'error'), 3000);
@@ -1159,7 +1168,7 @@
 
                 selectedPages.forEach(item => {
                     if (item.type === 'divider') {
-                        yPosition -= 10; // Add some space before a section
+                        yPosition -= 10;
                         tocPage.drawText(item.firstLine, { x: 50, y: yPosition, size: 14, font: customFont, color: rgb(0,0,0) });
                         yPosition -= 25;
                     } else {
@@ -1176,7 +1185,7 @@
                     if (item.type === 'divider') continue;
 
                     pageCounter++;
-                    progress.textContent = `正在合併頁面 (${pageCounter}/${selectedPages.filter(p => p.type !== 'divider').length})...`;
+                    progress.textContent = `正在合併頁面 (${pageCounter}/${pageItems.length})...`;
                     
                     const sourceFile = pdfFiles[item.fileIndex];
                     const freshArrayBuffer = await sourceFile.file.arrayBuffer();
