@@ -1,11 +1,20 @@
 // ==========================================================
-// ===         *** 最終修正 ***
-// === window.onload ensures DOM is ready.
-// === workerSrc is now set in index.html right after pdf.js loads.
+// ===         *** 本地檔案 + window.onload ***
+// === 確保所有函式庫 (包含本地 pdf.min.js) 都載入後才執行
 // ==========================================================
 window.onload = function() {
 
-    // --- workerSrc line removed from here ---
+    // --- 檢查 pdfjsLib 是否已定義 ---
+    if (typeof pdfjsLib === 'undefined') {
+        console.error("CRITICAL: pdfjsLib is not defined even after window.onload!");
+        alert("錯誤：PDF 核心函式庫 (pdf.min.js) 載入失敗。請確認檔案是否存在於同資料夾。");
+        // 可以在此處停止執行或顯示更明顯的錯誤訊息
+        document.body.innerHTML = '<h1 style="color: red; text-align: center; margin-top: 50px;">錯誤：無法載入 PDF 函式庫！</h1>';
+        return; 
+    }
+
+    // --- 設定 workerSrc 指向本地檔案 ---
+    pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.js';
 
     let pdfFiles = [];
     let selectedPages = [];
@@ -17,22 +26,16 @@ window.onload = function() {
     let clearSelectedConfirmMode = false;
     let isSourceEditMode = false;
 
-    // --- Check if necessary libraries are loaded ---
-    if (typeof pdfjsLib === 'undefined') {
-        console.error("CRITICAL: pdfjsLib is not defined when onload executes!");
-        alert("錯誤：PDF 函式庫載入失敗，請檢查網路連線並重新整理頁面。");
-        return; // Stop execution if pdfjsLib is missing
-    }
+    // --- 檢查其他函式庫 ---
     if (typeof PDFLib === 'undefined') {
         console.error("CRITICAL: PDFLib is not defined when onload executes!");
-        alert("錯誤：PDF 編輯函式庫載入失敗，請檢查網路連線並重新整理頁面。");
+        alert("錯誤：PDF 編輯函式庫 (pdf-lib.min.js) 載入失敗，請檢查網路連線。");
         return; 
     }
      if (typeof fontkit === 'undefined') {
         console.error("CRITICAL: fontkit is not defined when onload executes!");
-        // Fontkit is mainly for TOC, maybe allow continuing with a warning?
-        // alert("警告：字型函式庫載入失敗，目錄功能可能異常。");
-        // We'll proceed for now, but log the error.
+        alert("警告：字型函式庫 (fontkit.umd.min.js) 載入失敗，目錄功能可能異常。");
+        // 仍然繼續執行
     }
 
 
@@ -70,7 +73,7 @@ window.onload = function() {
             const fileData = { name: file.name, file: file, pages: [], pdfDoc: null };
             try {
                 const arrayBuffer = await file.arrayBuffer();
-                // Use pdfjsLib safely here
+                // 使用 pdfjsLib (現在應該已定義)
                 const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
                 fileData.pdfDoc = pdf;
                 for (let i = 1; i <= pdf.numPages; i++) {
@@ -688,7 +691,16 @@ window.onload = function() {
             } catch (fontError) {
                 console.error("中文字型載入失敗:", fontError);
                 alert("警告：中文字型下載失敗，目錄將使用英文字型顯示（中文會變亂碼）。");
-                customFont = await newPdf.embedFont(StandardFonts.Helvetica);
+                // Fallback font
+                 try {
+                     customFont = await newPdf.embedFont(StandardFonts.Helvetica);
+                 } catch (embedError) {
+                     console.error("Failed to embed fallback font:", embedError);
+                     alert("致命錯誤：無法嵌入預設字型。");
+                     progress.textContent = '❌ 生成失敗：無法嵌入字型';
+                     progress.classList.add('active', 'error');
+                     return; // Abort if even fallback fails
+                 }
             }
             
             const addToc = addTocCheckbox.checked;
@@ -785,10 +797,11 @@ window.onload = function() {
                 progress.textContent = `正在合併頁面 (${pageCounterForContent}/${pageItems.length})...`;
                 
                 // Ensure source file data is valid
-                if (!item.fileIndex || !pdfFiles[item.fileIndex] || !pdfFiles[item.fileIndex].file || !item.pageNum) {
+                if (item.fileIndex === undefined || item.fileIndex === null || !pdfFiles[item.fileIndex] || !pdfFiles[item.fileIndex].file || !item.pageNum) {
                      console.error("Missing data for selected page item:", item);
                      continue; // Skip this page if data is bad
                 }
+
 
                 const sourceFile = pdfFiles[item.fileIndex];
                 try {
@@ -816,7 +829,7 @@ window.onload = function() {
                             x: width - 40,
                             y: 30,
                             size: 10,
-                            font: customFont,
+                            font: customFont, // Use the potentially fallback font
                             color: rgb(0, 0, 0)
                         });
                      } else {
@@ -893,6 +906,8 @@ window.onload = function() {
              console.error('生成 PDF 時發生錯誤：', error); // Log the full error
             progress.textContent = '❌ 生成失敗：' + error.message;
             progress.classList.add('active', 'error');
+             // Consider adding a longer timeout for error messages
+             setTimeout(() => progress.classList.remove('active', 'error'), 8000);
         }
     }
 
