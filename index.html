@@ -6,10 +6,21 @@
     <title>PDF 頁面重組工具 (專業目錄版)</title>
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.js"></script>
+    
+    <script>
+      // Ensure pdfjsLib exists before setting workerSrc
+      if (typeof pdfjsLib !== 'undefined') {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.js';
+      } else {
+        console.error("CRITICAL: pdfjsLib is not defined immediately after loading pdf.min.js!");
+        // Optionally display an error message to the user here
+      }
+    </script>
+    
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
     <script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
 
-    <link rel="stylesheet" href="style.css"> 
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="sidebar">
