@@ -1,17 +1,23 @@
 // ==========================================================
-// === 修正：更換為 esm.sh 這個更穩定的 CDN 來載入模組 ===
+// === 變更 #1：在最開頭加入 import (使用本地檔案和 CDN 模組) ===
 // ==========================================================
 // Import local files (from user upload)
 import * as pdfjsLib from './pdf.mjs';
 
-// Import other libraries from a reliable ESM CDN
-import { PDFDocument, rgb, StandardFonts } from 'https://esm.sh/pdf-lib@1.17.1';
-import fontkit from 'https://esm.sh/@pdf-lib/fontkit@1.1.1';
+// Import other libraries from CDN (ESM module versions)
+import { PDFDocument, rgb, StandardFonts } from 'https.cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.esm.min.js';
 
-// Set worker path to local file
+// ==========================================================
+// === 修正：更換為 unpkg 這個 CDN 的 fontkit 網址 ===
+// ==========================================================
+import fontkit from 'https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.esm.js';
+
+// ==========================================================
+// === 變更 #2：設定 workerSrc (指向本地檔案) ===
+// ==========================================================
 pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.mjs';
 
-// --- (The rest of the code is unchanged) ---
+// --- (以下是您原有的程式碼) ---
 
 let pdfFiles = [];
 let selectedPages = [];
@@ -33,6 +39,7 @@ const progress = document.getElementById('progress');
 const tocModal = document.getElementById('tocModal');
 const tocTextarea = document.getElementById('tocTextarea');
 
+// --- 新增功能：獲取選項元素 ---
 const addTocCheckbox = document.getElementById('addTocCheckbox');
 const addEncryptCheckbox = document.getElementById('addEncryptCheckbox');
 
@@ -195,7 +202,101 @@ function removeFile(index) {
     renderSelectedPages();
 }
 
-// Make functions available globally so they can be called from HTML `onclick`
+function clearAllFiles() {
+    if (pdfFiles.length === 0) return;
+    const clearBtn = document.getElementById('clearFilesBtn');
+    if (!clearFilesConfirmMode) {
+        clearFilesConfirmMode = true;
+        clearBtn.classList.add('confirm-mode');
+        clearBtn.innerHTML = '🗑️ 確定清除所有檔案？';
+        setTimeout(() => {
+            clearFilesConfirmMode = false;
+            clearBtn.classList.remove('confirm-mode');
+            clearBtn.innerHTML = '🗑️ 清除所有檔案';
+        }, 3000);
+        return;
+    }
+    pdfFiles = [];
+    selectedPages = [];
+    lastSelectedIndex = null;
+    clearFilesConfirmMode = false;
+    fileInput.value = '';
+    clearBtn.classList.remove('confirm-mode');
+    clearBtn.innerHTML = '🗑️ 清除所有檔案';
+    updateFileList();
+    renderSourcePages();
+    renderSelectedPages();
+}
+
+function setViewMode(mode) {
+    viewMode = mode;
+    document.getElementById('gridViewBtn').classList.toggle('active', mode === 'grid');
+    document.getElementById('listViewBtn').classList.toggle('active', mode === 'list');
+    renderSourcePages();
+}
+
+function setThumbnailSize(size) {
+    thumbnailSize = size;
+    sourcePanel.classList.remove('size-small', 'size-medium', 'size-large', 'size-xlarge');
+    sourcePanel.classList.add(`size-${size}`);
+    
+    document.querySelectorAll('#size-toggle button').forEach(btn => btn.classList.remove('active'));
+    document.querySelector(`#size-toggle button[onclick="setThumbnailSize('${size}')"]`).classList.add('active');
+}
+
+function toggleSourceEditMode() {
+    isSourceEditMode = !isSourceEditMode;
+    const btn = document.getElementById('editSourceBtn');
+    sourcePanel.classList.toggle('edit-mode', isSourceEditMode);
+    btn.classList.toggle('active', isSourceEditMode);
+    btn.innerHTML = isSourceEditMode ? '✓ 完成' : '🗑️ 刪除頁面';
+    renderSourcePages();
+}
+
+function deleteSourcePage(fileIndex, pageIndex) {
+    const pageToDelete = pdfFiles[fileIndex].pages[pageIndex];
+    selectedPages = selectedPages.filter(p => !(p.type !== 'divider' && p.fileIndex === fileIndex && p.pageNum === pageToDelete.pageNum));
+    pdfFiles[fileIndex].pages.splice(pageIndex, 1);
+    if (pdfFiles[fileIndex].pages.length === 0) {
+        removeFile(fileIndex);
+    } else {
+        renderSourcePages();
+        renderSelectedPages();
+    }
+}
+
+// 讓函式可以在 HTML 中被呼叫 (因為 module 預設是獨立 scope)
+window.togglePage = function(fileIndex, pageIndex, event) {
+    if (isSourceEditMode) return;
+    const currentGlobalIndex = getGlobalPageIndex(fileIndex, pageIndex);
+    if (event && event.shiftKey && lastSelectedIndex !== null) {
+        const start = Math.min(lastSelectedIndex, currentGlobalIndex);
+        const end = Math.max(lastSelectedIndex, currentGlobalIndex);
+        for (let i = start; i <= end; i++) {
+            const pos = getPageByGlobalIndex(i);
+            if (pos) {
+                const f = pdfFiles[pos.fileIndex];
+                const p = f.pages[pos.pageIndex];
+                if (!selectedPages.some(sp => sp.type !== 'divider' && sp.fileIndex === pos.fileIndex && sp.pageNum === p.pageNum)) {
+                    selectedPages.push({ type: 'page', fileIndex: pos.fileIndex, pageNum: p.pageNum, fileName: f.name, canvas: p.canvas, firstLine: p.firstLine });
+                }
+            }
+        }
+    } else {
+        const existingIndex = selectedPages.findIndex(p => p.type !== 'divider' && p.fileIndex === fileIndex && p.pageNum === pdfFiles[fileIndex].pages[pageIndex].pageNum);
+        if (existingIndex >= 0) {
+            selectedPages.splice(existingIndex, 1);
+        } else {
+            const file = pdfFiles[fileIndex];
+            const page = file.pages[pageIndex];
+            selectedPages.push({ type: 'page', fileIndex: fileIndex, pageNum: page.pageNum, fileName: file.name, canvas: page.canvas, firstLine: page.firstLine });
+        }
+    }
+    lastSelectedIndex = currentGlobalIndex;
+    renderSourcePages();
+    renderSelectedPages();
+}
+
 window.clearAllFiles = function() {
     if (pdfFiles.length === 0) return;
     const clearBtn = document.getElementById('clearFilesBtn');
@@ -259,37 +360,6 @@ window.deleteSourcePage = function(fileIndex, pageIndex) {
     }
 }
 
-window.togglePage = function(fileIndex, pageIndex, event) {
-    if (isSourceEditMode) return;
-    const currentGlobalIndex = getGlobalPageIndex(fileIndex, pageIndex);
-    if (event && event.shiftKey && lastSelectedIndex !== null) {
-        const start = Math.min(lastSelectedIndex, currentGlobalIndex);
-        const end = Math.max(lastSelectedIndex, currentGlobalIndex);
-        for (let i = start; i <= end; i++) {
-            const pos = getPageByGlobalIndex(i);
-            if (pos) {
-                const f = pdfFiles[pos.fileIndex];
-                const p = f.pages[pos.pageIndex];
-                if (!selectedPages.some(sp => sp.type !== 'divider' && sp.fileIndex === pos.fileIndex && sp.pageNum === p.pageNum)) {
-                    selectedPages.push({ type: 'page', fileIndex: pos.fileIndex, pageNum: p.pageNum, fileName: f.name, canvas: p.canvas, firstLine: p.firstLine });
-                }
-            }
-        }
-    } else {
-        const existingIndex = selectedPages.findIndex(p => p.type !== 'divider' && p.fileIndex === fileIndex && p.pageNum === pdfFiles[fileIndex].pages[pageIndex].pageNum);
-        if (existingIndex >= 0) {
-            selectedPages.splice(existingIndex, 1);
-        } else {
-            const file = pdfFiles[fileIndex];
-            const page = file.pages[pageIndex];
-            selectedPages.push({ type: 'page', fileIndex: fileIndex, pageNum: page.pageNum, fileName: file.name, canvas: page.canvas, firstLine: page.firstLine });
-        }
-    }
-    lastSelectedIndex = currentGlobalIndex;
-    renderSourcePages();
-    renderSelectedPages();
-}
-
 window.clearSelectedPages = function() {
     if (selectedPages.length === 0) return;
     const btn = document.getElementById('clearSelectedBtn');
@@ -318,7 +388,7 @@ window.addSectionDivider = function() {
         selectedPages.push({
             type: 'divider',
             firstLine: title.trim(),
-            id: Date.now()
+            id: Date.now() // Unique ID for key
         });
         renderSelectedPages();
     }
@@ -363,68 +433,6 @@ window.removeSelectedPage = function(index) {
     renderSelectedPages();
 }
 
-function renderSourcePages() {
-    if (pdfFiles.length === 0) {
-        sourcePages.innerHTML = '<div class="empty-message">尚未載入任何 PDF 檔案</div>';
-        return;
-    }
-    sourcePages.innerHTML = pdfFiles.map((file, fileIndex) => {
-        const pagesHtml = viewMode === 'grid' 
-            ? `<div class="pages-grid">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'grid')).join('')}</div>`
-            : `<div class="pages-list">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'list')).join('')}</div>`;
-        return `<div class="pdf-file"><div class="pdf-file-header"><div class="pdf-file-name">${file.name}</div></div>${pagesHtml}</div>`;
-    }).join('');
-    pdfFiles.forEach((file, fileIndex) => {
-        file.pages.forEach((page, pageIndex) => {
-            const canvas = document.getElementById(`source_${fileIndex}_${pageIndex}`);
-            if (canvas) {
-                const ctx = canvas.getContext('2d');
-                canvas.width = page.canvas.width;
-                canvas.height = page.canvas.height;
-                ctx.drawImage(page.canvas, 0, 0);
-            }
-        });
-    });
-}
-
-function renderPageItem(fileIndex, pageIndex, type) {
-    const page = pdfFiles[fileIndex].pages[pageIndex];
-    const isSelected = selectedPages.some(p => p.type !== 'divider' && p.fileIndex === fileIndex && p.pageNum === page.pageNum);
-    const clickAction = isSourceEditMode ? '' : `onclick="togglePage(${fileIndex}, ${pageIndex}, event)"`;
-    
-    if (type === 'grid') {
-        return `
-            <div class="page-item ${isSelected ? 'selected' : ''}" ${clickAction}>
-                <button class="delete-btn" onclick="deleteSourcePage(${fileIndex}, ${pageIndex})">✕</button>
-                <canvas id="source_${fileIndex}_${pageIndex}"></canvas>
-                <div class="page-number">第 ${page.pageNum} 頁</div>
-            </div>`;
-    } else { // list
-        return `
-            <div class="page-list-item ${isSelected ? 'selected' : ''}" ${clickAction} title="${page.firstLine}">
-                <div class="page-list-text">${page.firstLine}</div>
-                <div class="page-list-number">第 ${page.pageNum} 頁</div>
-                <button class="delete-btn" onclick="deleteSourcePage(${fileIndex}, ${pageIndex})">刪除</button>
-            </div>`;
-    }
-}
-
-function getGlobalPageIndex(fileIndex, pageIndex) {
-    return pdfFiles.slice(0, fileIndex).reduce((acc, file) => acc + file.pages.length, 0) + pageIndex;
-}
-
-function getPageByGlobalIndex(globalIndex) {
-    let count = 0;
-    for (let fileIndex = 0; fileIndex < pdfFiles.length; fileIndex++) {
-        const file = pdfFiles[fileIndex];
-        if (globalIndex < count + file.pages.length) {
-            return { fileIndex, pageIndex: globalIndex - count };
-        }
-        count += file.pages.length;
-    }
-    return null;
-}
-
 function renderSelectedPages() {
     if (selectedPages.length === 0) {
         selectedPagesContainer.innerHTML = '<div class="empty-message">尚未選擇任何頁面</div>';
@@ -442,6 +450,7 @@ function renderSelectedPages() {
                 </div>
             `;
         }
+        // Default is a page item
         return `
             <div class="selected-page-item" draggable="true" data-index="${index}">
                 <span class="drag-handle">⋮⋮</span>
@@ -619,16 +628,27 @@ window.generatePDF = async function() {
 
         progress.textContent = '正在儲存 PDF...';
         
+        // ==========================================================
+        // ===            *** 最終加密修正 *** ===
+        // ==========================================================
         const saveOptions = {};
         if (addEncryptCheckbox.checked) {
-            const password = prompt("請輸入 PDF [開啟] 密碼（若取消則不加密）：");
-            if (password && password.trim() !== "") {
-                saveOptions.userPassword = password;
+            const userPassword = prompt("請輸入 PDF [開啟] 密碼（若取消則不加密）：");
+            if (userPassword && userPassword.trim() !== "") {
+                
+                // 1. 設定您輸入的 [開啟] 密碼 (User)
+                saveOptions.userPassword = userPassword;
+                
+                // 2. 設定一個 *不同* 且隨機的 [權限] 密碼 (Owner)
+                //    這會強制瀏覽器等閱讀器詢問 [開啟] 密碼
+                saveOptions.ownerPassword = `owner-${userPassword}-${Date.now()}`; 
+
                 progress.textContent = '正在加密並儲存...';
             } else {
                 alert("未輸入密碼，將不進行加密。");
             }
         }
+        // ==========================================================
         
         const pdfBytes = await newPdf.save(saveOptions);
 
@@ -645,9 +665,7 @@ window.generatePDF = async function() {
             progress.classList.add('active', 'error');
             setTimeout(() => {
                 progress.classList.remove('active', 'error');
-                if (document.body.contains(a)) {
-                    document.body.removeChild(a);
-                }
+                document.body.removeChild(a);
                 URL.revokeObjectURL(url);
             }, 3000);
             return;
@@ -660,9 +678,7 @@ window.generatePDF = async function() {
         document.body.appendChild(a);
         a.click();
         setTimeout(() => {
-            if (document.body.contains(a)) {
-                document.body.removeChild(a);
-            }
+            document.body.removeChild(a);
             URL.revokeObjectURL(url);
         }, 1000);
 
