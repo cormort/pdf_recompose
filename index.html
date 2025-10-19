@@ -1066,7 +1066,7 @@
 
                 try {
                     progress.textContent = '正在下載中文字型...';
-                    const fontUrl = 'https://cdn.jsdelivr.net/npm/source-han-sans-cn@2.004.0/OTF/SourceHanSansCN-Regular.otf';
+                    const fontUrl = './fonts/NotoSansTC-Regular.otf';
                     const fontBytes = await fetch(fontUrl).then(res => res.arrayBuffer());
                     newPdf.registerFontkit(fontkit);
                     // --- 核心修正：加入 { subset: true } ---
