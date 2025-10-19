@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF 頁面重組工具 (最終版)</title>
+    <title>PDF 頁面重組工具 (專業目錄版)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
     <script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
@@ -197,6 +197,9 @@
         .btn-edit { background: #9b59b6; }
         .btn-edit:hover { background: #8e44ad; }
         .btn-edit.active { background: #27ae60; }
+        
+        .btn-add-section { background: #16a085; }
+        .btn-add-section:hover { background: #117a65; }
 
         .pdf-file {
             background: white;
@@ -385,7 +388,7 @@
             cursor: move;
         }
 
-        .selected-page-item.dragging {
+        .selected-page-item.dragging, .selected-divider-item.dragging {
             opacity: 0.5;
         }
 
@@ -410,6 +413,24 @@
         .selected-page-source {
             font-size: 12px;
             color: #7f8c8d;
+        }
+        
+        .selected-divider-item {
+            background: #d5f5e3;
+            border: 2px dashed #27ae60;
+            border-radius: 5px;
+            padding: 10px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            cursor: move;
+            text-align: center;
+        }
+        
+        .selected-divider-title {
+            flex: 1;
+            font-weight: bold;
+            color: #145a32;
         }
 
         .file-list {
@@ -589,6 +610,7 @@
             <div class="panel-title">
                 <span>📋 已選擇的頁面</span>
                 <div class="panel-controls">
+                    <button class="btn-panel-action btn-add-section" onclick="addSectionDivider()">➕ 新增小節</button>
                     <button class="btn-panel-action btn-edit" onclick="openTocEditor()">✏️ 批次編輯目錄</button>
                     <button id="clearSelectedBtn" class="btn-panel-action btn-clear" onclick="clearSelectedPages()">🗑️ 清除選取</button>
                 </div>
@@ -875,7 +897,7 @@
 
         function renderPageItem(fileIndex, pageIndex, type) {
             const page = pdfFiles[fileIndex].pages[pageIndex];
-            const isSelected = selectedPages.some(p => p.fileIndex === fileIndex && p.pageNum === page.pageNum);
+            const isSelected = selectedPages.some(p => p.type !== 'divider' && p.fileIndex === fileIndex && p.pageNum === page.pageNum);
             const clickAction = isSourceEditMode ? '' : `onclick="togglePage(${fileIndex}, ${pageIndex}, event)"`;
             
             if (type === 'grid') {
@@ -922,19 +944,19 @@
                     if (pos) {
                         const f = pdfFiles[pos.fileIndex];
                         const p = f.pages[pos.pageIndex];
-                        if (!selectedPages.some(sp => sp.fileIndex === pos.fileIndex && sp.pageNum === p.pageNum)) {
-                            selectedPages.push({ fileIndex: pos.fileIndex, pageNum: p.pageNum, fileName: f.name, canvas: p.canvas, firstLine: p.firstLine });
+                        if (!selectedPages.some(sp => sp.type !== 'divider' && sp.fileIndex === pos.fileIndex && sp.pageNum === p.pageNum)) {
+                            selectedPages.push({ type: 'page', fileIndex: pos.fileIndex, pageNum: p.pageNum, fileName: f.name, canvas: p.canvas, firstLine: p.firstLine });
                         }
                     }
                 }
             } else {
-                const existingIndex = selectedPages.findIndex(p => p.fileIndex === fileIndex && p.pageNum === pdfFiles[fileIndex].pages[pageIndex].pageNum);
+                const existingIndex = selectedPages.findIndex(p => p.type !== 'divider' && p.fileIndex === fileIndex && p.pageNum === pdfFiles[fileIndex].pages[pageIndex].pageNum);
                 if (existingIndex >= 0) {
                     selectedPages.splice(existingIndex, 1);
                 } else {
                     const file = pdfFiles[fileIndex];
                     const page = file.pages[pageIndex];
-                    selectedPages.push({ fileIndex: fileIndex, pageNum: page.pageNum, fileName: file.name, canvas: page.canvas, firstLine: page.firstLine });
+                    selectedPages.push({ type: 'page', fileIndex: fileIndex, pageNum: page.pageNum, fileName: file.name, canvas: page.canvas, firstLine: page.firstLine });
                 }
             }
             lastSelectedIndex = currentGlobalIndex;
@@ -964,30 +986,59 @@
             renderSelectedPages();
         }
 
+        function addSectionDivider() {
+            const title = prompt("請輸入小節標題：");
+            if (title && title.trim()) {
+                selectedPages.push({
+                    type: 'divider',
+                    firstLine: title.trim(),
+                    id: Date.now() // Unique ID for key
+                });
+                renderSelectedPages();
+            }
+        }
+
         function renderSelectedPages() {
             if (selectedPages.length === 0) {
                 selectedPagesContainer.innerHTML = '<div class="empty-message">尚未選擇任何頁面</div>';
                 return;
             }
-            selectedPagesContainer.innerHTML = selectedPages.map((page, index) => `
-                <div class="selected-page-item" draggable="true" data-index="${index}">
-                    <span class="drag-handle">⋮⋮</span>
-                    <canvas id="selected_${index}"></canvas>
-                    <div class="selected-page-info">
-                        <div class="selected-page-title">${page.firstLine}</div>
-                        <div class="selected-page-source">${page.fileName} - 第 ${page.pageNum} 頁</div>
+            selectedPagesContainer.innerHTML = selectedPages.map((item, index) => {
+                if (item.type === 'divider') {
+                    return `
+                        <div class="selected-divider-item" draggable="true" data-index="${index}">
+                            <span class="drag-handle">⋮⋮</span>
+                            <div class="selected-divider-title">${item.firstLine}</div>
+                            <div class="page-actions">
+                                <button class="btn btn-danger" onclick="removeSelectedPage(${index})">✕</button>
+                            </div>
+                        </div>
+                    `;
+                }
+                // Default is a page item
+                return `
+                    <div class="selected-page-item" draggable="true" data-index="${index}">
+                        <span class="drag-handle">⋮⋮</span>
+                        <canvas id="selected_${index}"></canvas>
+                        <div class="selected-page-info">
+                            <div class="selected-page-title">${item.firstLine}</div>
+                            <div class="selected-page-source">${item.fileName} - 第 ${item.pageNum} 頁</div>
+                        </div>
+                        <div class="page-actions">
+                            <button class="btn btn-danger" onclick="removeSelectedPage(${index})">✕</button>
+                        </div>
                     </div>
-                    <div class="page-actions">
-                        <button class="btn btn-danger" onclick="removeSelectedPage(${index})">✕</button>
-                    </div>
-                </div>
-            `).join('');
-            selectedPages.forEach((page, index) => {
-                const canvas = document.getElementById(`selected_${index}`);
-                const ctx = canvas.getContext('2d');
-                canvas.width = page.canvas.width;
-                canvas.height = page.canvas.height;
-                ctx.drawImage(page.canvas, 0, 0);
+                `;
+            }).join('');
+
+            selectedPages.forEach((item, index) => {
+                if (item.type !== 'divider') {
+                    const canvas = document.getElementById(`selected_${index}`);
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = item.canvas.width;
+                    canvas.height = item.canvas.height;
+                    ctx.drawImage(item.canvas, 0, 0);
+                }
             });
             setupDragAndDrop();
         }
@@ -999,7 +1050,7 @@
         }
 
         function setupDragAndDrop() {
-            document.querySelectorAll('.selected-page-item').forEach(item => {
+            document.querySelectorAll('.selected-page-item, .selected-divider-item').forEach(item => {
                 item.addEventListener('dragstart', (e) => {
                     draggedElement = item;
                     item.classList.add('dragging');
@@ -1019,15 +1070,15 @@
                     e.preventDefault();
                     const fromIndex = parseInt(draggedElement.dataset.index);
                     const toIndex = Array.from(selectedPagesContainer.children).indexOf(draggedElement);
-                    const [movedPage] = selectedPages.splice(fromIndex, 1);
-                    selectedPages.splice(toIndex, 0, movedPage);
+                    const [movedItem] = selectedPages.splice(fromIndex, 1);
+                    selectedPages.splice(toIndex, 0, movedItem);
                     renderSelectedPages();
                 });
             });
         }
 
         function getDragAfterElement(container, y) {
-            const draggableElements = [...container.querySelectorAll('.selected-page-item:not(.dragging)')];
+            const draggableElements = [...container.querySelectorAll('.selected-page-item:not(.dragging), .selected-divider-item:not(.dragging)')];
             return draggableElements.reduce((closest, child) => {
                 const box = child.getBoundingClientRect();
                 const offset = y - box.top - box.height / 2;
@@ -1040,11 +1091,12 @@
         }
 
         function openTocEditor() {
-            if (selectedPages.length === 0) {
+            const pageItems = selectedPages.filter(p => p.type !== 'divider');
+            if (pageItems.length === 0) {
                 alert('請先選擇至少一個頁面才能編輯目錄。');
                 return;
             }
-            const titles = selectedPages.map(p => p.firstLine).join('\n');
+            const titles = pageItems.map(p => p.firstLine).join('\n');
             tocTextarea.value = titles;
             tocModal.style.display = 'flex';
         }
@@ -1055,19 +1107,24 @@
 
         function saveToc() {
             const newTitles = tocTextarea.value.split('\n');
-            if (newTitles.length !== selectedPages.length) {
-                alert(`錯誤：目錄行數 (${newTitles.length}) 與選擇的頁數 (${selectedPages.length}) 不符，請檢查後再儲存。`);
+            const pageItems = selectedPages.filter(p => p.type !== 'divider');
+            if (newTitles.length !== pageItems.length) {
+                alert(`錯誤：目錄行數 (${newTitles.length}) 與選擇的頁數 (${pageItems.length}) 不符，請檢查後再儲存。`);
                 return;
             }
-            selectedPages.forEach((page, index) => {
-                page.firstLine = newTitles[index];
+            let titleIndex = 0;
+            selectedPages.forEach(item => {
+                if (item.type !== 'divider') {
+                    item.firstLine = newTitles[titleIndex];
+                    titleIndex++;
+                }
             });
             renderSelectedPages();
             closeTocEditor();
         }
 
         async function generatePDF() {
-            if (selectedPages.length === 0) {
+            if (selectedPages.filter(p => p.type !== 'divider').length === 0) {
                 progress.textContent = '⚠️ 請至少選擇一個頁面';
                 progress.classList.add('active', 'error');
                 setTimeout(() => progress.classList.remove('active', 'error'), 3000);
@@ -1098,25 +1155,36 @@
                 const tocPage = newPdf.addPage([842, 595]);
                 tocPage.drawText('目錄', { x: 50, y: 595 - 50, size: 18, font: customFont, color: rgb(0,0,0) });
                 let yPosition = 595 - 90;
-                selectedPages.forEach((page, index) => {
-                    const title = page.firstLine;
-                    const pageNumberInTOC = index + 1;
-                    const text = `${pageNumberInTOC}. ${title.substring(0, 35)} ............ Page ${pageNumberInTOC}`;
-                    tocPage.drawText(text, { x: 70, y: yPosition, size: 12, font: customFont, color: rgb(0,0,0) });
-                    yPosition -= 20;
+                let pageCounter = 0;
+
+                selectedPages.forEach(item => {
+                    if (item.type === 'divider') {
+                        yPosition -= 10; // Add some space before a section
+                        tocPage.drawText(item.firstLine, { x: 50, y: yPosition, size: 14, font: customFont, color: rgb(0,0,0) });
+                        yPosition -= 25;
+                    } else {
+                        pageCounter++;
+                        const title = item.firstLine;
+                        const text = `${pageCounter}. ${title.substring(0, 35)} ............ Page ${pageCounter}`;
+                        tocPage.drawText(text, { x: 70, y: yPosition, size: 12, font: customFont, color: rgb(0,0,0) });
+                        yPosition -= 20;
+                    }
                 });
 
-                for (let i = 0; i < selectedPages.length; i++) {
-                    progress.textContent = `正在合併頁面 (${i + 1}/${selectedPages.length})...`;
-                    const selectedPage = selectedPages[i];
-                    const sourceFile = pdfFiles[selectedPage.fileIndex];
+                pageCounter = 0;
+                for (const item of selectedPages) {
+                    if (item.type === 'divider') continue;
+
+                    pageCounter++;
+                    progress.textContent = `正在合併頁面 (${pageCounter}/${selectedPages.filter(p => p.type !== 'divider').length})...`;
+                    
+                    const sourceFile = pdfFiles[item.fileIndex];
                     const freshArrayBuffer = await sourceFile.file.arrayBuffer();
                     const sourcePdf = await PDFDocument.load(freshArrayBuffer);
-                    const [copiedPage] = await newPdf.copyPages(sourcePdf, [selectedPage.pageNum - 1]);
+                    const [copiedPage] = await newPdf.copyPages(sourcePdf, [item.pageNum - 1]);
                     newPdf.addPage(copiedPage);
                     
-                    // --- NEW: Add page number to bottom right ---
-                    const newPageNumber = `${i + 1}`;
+                    const newPageNumber = `${pageCounter}`;
                     const { width, height } = copiedPage.getSize();
                     copiedPage.drawText(newPageNumber, {
                         x: width - 40,
