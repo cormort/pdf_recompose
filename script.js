@@ -674,7 +674,7 @@ window.onload = function() {
 
             try {
                 progress.textContent = '正在下載中文字型...';
-                const fontUrl = 'https://cdn.jsdelivr.net/gh/google/fonts/ofl/notosanstc/NotoSansTC-Regular.otf';
+                const fontUrl = '.fonts/NotoSansTC-Regular.ttf';
                 const fontBytes = await fetch(fontUrl).then(res => {
                     if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
                     return res.arrayBuffer();
