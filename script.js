@@ -629,59 +629,188 @@ window.onload = function() {
     }
 
     async function generatePDF() {
-        if (selectedPages.length === 0) {
-            alert("請先選擇至少一頁！");
-            return;
+    // 基本檢查
+    if (typeof PDFLib === 'undefined' || typeof PDFLib.PDFDocument === 'undefined') {
+        alert("錯誤：PDF 編輯函式庫 (pdf-lib) 未載入。");
+        return;
+    }
+
+    const { PDFDocument, StandardFonts, rgb } = PDFLib;
+
+    const pageItems = selectedPages.filter(p => p && p.type !== 'divider');
+    if (pageItems.length === 0) {
+        progress.textContent = '⚠️ 請至少選擇一個頁面';
+        progress.classList.add('active', 'error');
+        setTimeout(() => progress.classList.remove('active', 'error'), 3000);
+        return;
+    }
+
+    try {
+        progress.textContent = '⏳ 正在建立 PDF...';
+        progress.classList.remove('success', 'error');
+        progress.classList.add('active');
+
+        // 建立新 PDF
+        const newPdf = await PDFDocument.create();
+
+        // 載入並嵌入字型（若你想使用中文字型，請改為載入 NotoSansTC 等本地字型）
+        let customFont = null;
+        try {
+            if (typeof fontkit !== 'undefined') {
+                newPdf.registerFontkit(fontkit);
+                // 預設嵌入系統字型或內建 Helvetica 作為 fallback
+                customFont = await newPdf.embedFont(StandardFonts.Helvetica);
+            } else {
+                customFont = await newPdf.embedFont(StandardFonts.Helvetica);
+            }
+        } catch (e) {
+            console.warn("字型嵌入失敗，使用內建字型：", e);
+            customFont = await newPdf.embedFont(StandardFonts.Helvetica);
         }
 
-        progress.textContent = "⏳ 正在合併 PDF...";
-        progress.classList.add("active");
+        // 建立目錄頁（若選擇）
+        const addToc = addTocCheckbox.checked;
+        let pageOffset = 0;
+        if (addToc) {
+            // 建第一頁作為目錄（簡單呈現）
+            const tocPage = newPdf.addPage([595.28, 841.89]); // A4 portrait
+            const { width, height } = tocPage.getSize();
+            const titleSize = 20;
+            tocPage.drawText('目錄', { x: 50, y: height - 80, size: titleSize, font: customFont, color: rgb(0,0,0) });
 
-        const mergedPdf = await PDFLib.PDFDocument.create();
+            let y = height - 110;
+            let contentIndex = 0;
+            for (const item of selectedPages) {
+                if (!item) continue;
+                if (item.type === 'divider') {
+                    // 分節標題
+                    tocPage.drawText(item.firstLine || '小節', { x: 60, y: y, size: 14, font: customFont });
+                    y -= 22;
+                } else {
+                    contentIndex++;
+                    const title = item.firstLine || (`第 ${contentIndex} 頁`);
+                    tocPage.drawText(`${contentIndex}. ${title}`, { x: 60, y: y, size: 12, font: customFont });
+                    y -= 18;
+                    if (y < 60) {
+                        // 如果超過一頁，建立新 TOC page（簡單版）
+                        y = height - 80;
+                        pageOffset += 1;
+                        // 新一頁
+                        // NOTE: 簡化處理：目前不會跨頁寫完整 TOC，實務可再擴充
+                        break;
+                    }
+                }
+            }
+            pageOffset = 1; // 目錄只佔 1 頁（簡化）
+        }
+
+        // 合併選取的頁面（不包含 divider）
+        let pageCounterForContent = 0;
         for (const item of selectedPages) {
-            if (item.type === "divider") {
-                // 分節頁：加入一頁含標題
-                const page = mergedPdf.addPage([595.28, 841.89]); // A4
-                const { width, height } = page.getSize();
-                page.drawText(item.firstLine, {
-                    x: 50,
-                    y: height / 2,
-                    size: 24,
-                    color: PDFLib.rgb(0.2, 0.2, 0.2),
-                });
+            if (!item || item.type === 'divider') continue;
+
+            // 檢查來源資料的正確性
+            if (item.fileIndex === undefined || item.fileIndex === null || !pdfFiles[item.fileIndex] || !pdfFiles[item.fileIndex].file) {
+                console.warn("跳過：來源檔案資訊不完整", item);
                 continue;
             }
-            const srcFile = pdfFiles[item.fileIndex];
-            if (!srcFile || !srcFile.file) continue;
-            const srcPdf = await PDFLib.PDFDocument.load(await srcFile.file.arrayBuffer());
-            const [copiedPage] = await mergedPdf.copyPages(srcPdf, [item.pageNum - 1]);
-            mergedPdf.addPage(copiedPage);
-        }
 
-        // 若勾選加密
-        if (addEncryptCheckbox.checked) {
-            const pwd = prompt("請輸入欲設定的開啟密碼：");
-            if (pwd && pwd.trim() !== "") {
-                await encryptPDF(mergedPdf, pwd.trim());
-            } else {
-                alert("未輸入密碼，將生成未加密版本。");
+            const sourceFile = pdfFiles[item.fileIndex];
+            try {
+                const arrayBuffer = await sourceFile.file.arrayBuffer();
+                // 載入來源 PDF（忽略被加密的檔案錯誤）
+                const srcPdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+                // 確保 page 範圍正確
+                const pageIndex = item.pageNum - 1;
+                if (pageIndex < 0 || pageIndex >= srcPdf.getPageCount()) {
+                    console.warn(`跳過：頁碼超出範圍 - ${sourceFile.name} 第 ${item.pageNum} 頁`);
+                    continue;
+                }
+                const [copiedPage] = await newPdf.copyPages(srcPdf, [pageIndex]);
+                newPdf.addPage(copiedPage);
+                pageCounterForContent++;
+            } catch (e) {
+                console.error("載入或複製來源頁面失敗：", e);
+                alert(`錯誤：無法載入來源檔案 ${sourceFile.name} 的第 ${item.pageNum} 頁。`);
             }
         }
 
-        const pdfBytes = await mergedPdf.save();
-        const blob = new Blob([pdfBytes], { type: "application/pdf" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "merged.pdf";
-        a.click();
+        // 若使用者勾選「加密」，詢問密碼並套用 encrypt
+        if (addEncryptCheckbox.checked) {
+            let userPassword = prompt("請輸入【開啟】密碼（將要求使用者在開啟檔案時輸入）：");
+            if (userPassword === null) {
+                // 使用者取消
+                progress.textContent = '使用者取消輸入密碼，匯出未加密檔案。';
+            } else {
+                userPassword = userPassword.trim();
+                if (userPassword.length === 0) {
+                    alert('未輸入密碼，將匯出未加密檔案。');
+                } else {
+                    // owner password（可改為單獨輸入或自動產生）
+                    const ownerPassword = `owner-${Date.now()}`;
 
-        URL.revokeObjectURL(url);
-        progress.textContent = "✅ PDF 生成完成！";
-        progress.classList.remove("active");
-        progress.classList.add("success");
-        setTimeout(() => progress.classList.remove("success"), 2000);
+                    // ====== 這裡呼叫 encrypt() ，需要 pdf-lib-with-encrypt 已正確載入 ======
+                    if (typeof newPdf.encrypt === 'function') {
+                        // 典型呼叫方式：pdfDoc.encrypt({ userPassword, ownerPassword, permissions: {...} })
+                        try {
+                            newPdf.encrypt({
+                                userPassword: userPassword,
+                                ownerPassword: ownerPassword,
+                                permissions: {
+                                    printing: 'lowResolution', // 'none' / 'lowResolution' / 'highResolution'
+                                    copying: false,
+                                    modifying: false,
+                                    annotating: false,
+                                },
+                                // keyLength: 256 // 若可設定，可加上
+                            });
+                            progress.textContent = '🔒 已對 PDF 套用密碼保護';
+                        } catch (encErr) {
+                            console.error('套用 encrypt 時失敗：', encErr);
+                            alert('套用 PDF 加密失敗（encrypt() 呼叫失敗）。請確認已載入 pdf-lib-with-encrypt。');
+                        }
+                    } else {
+                        console.error('encrypt() 函式不存在於 PDFDocument 實例，上層庫可能未正確載入。');
+                        alert('錯誤：本頁面尚未支援 PDF 加密（encrypt 函式不存在）。請確認已載入 pdf-lib-with-encrypt。');
+                    }
+                }
+            }
+        }
+
+        // 儲存 PDF（若 encrypt 正確套用，pdfBytes 會是已加密內容）
+        // 注意：某些 encrypt 實作需要在 save 時加入 useObjectStreams: false 以避免相容性問題
+        const savedBytes = await newPdf.save({ useObjectStreams: false });
+        const blob = new Blob([savedBytes], { type: 'application/pdf' });
+
+        // 下載
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const defaultFileName = '重組後的PDF_' + new Date().toISOString().slice(0,10) + '.pdf';
+        let finalName = prompt("請確認檔案名稱：", defaultFileName);
+        if (finalName === null) finalName = defaultFileName;
+        if (!finalName.toLowerCase().endsWith('.pdf')) finalName += '.pdf';
+        a.download = finalName;
+        document.body.appendChild(a);
+        a.click();
+        // 清理
+        setTimeout(() => {
+            try { document.body.removeChild(a); } catch(e){}
+            URL.revokeObjectURL(url);
+        }, 200);
+
+        progress.textContent = '✅ PDF 生成完成！';
+        progress.classList.add('success');
+        setTimeout(() => progress.classList.remove('active', 'success'), 3000);
+
+    } catch (err) {
+        console.error('generatePDF 失敗：', err);
+        progress.textContent = '❌ 生成失敗：' + (err && err.message ? err.message : err);
+        progress.classList.add('error', 'active');
+        setTimeout(() => progress.classList.remove('active', 'error'), 6000);
     }
+}
+
 
     // === PDF 加密函式 ===
     async function encryptPDF(pdfDoc, password) {
