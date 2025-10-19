@@ -1,8 +1,8 @@
 // ==========================================================
 // ===         *** 最終修正 ***
-// === 確保所有函式庫都載入後，才執行
+// === 改用 window.onload 確保所有函式庫都載入後才執行
 // ==========================================================
-document.addEventListener("DOMContentLoaded", () => {
+window.onload = function() {
 
     // --- (以下是您原有的全部程式碼) ---
 
@@ -173,7 +173,7 @@ document.addEventListener("DOMContentLoaded", () => {
         return title;
     }
 
-    // 讓 HTML 可以呼叫這些函式
+    // 讓 HTML 可以呼叫這些函式 (因為它們在 onload 函式內)
     window.updateFileList = updateFileList;
     window.removeFile = removeFile;
     window.clearAllFiles = clearAllFiles;
@@ -702,7 +702,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // --- 在 DOMContentLoaded 監聽器的最後，手動設定初始狀態 ---
+    // --- 在 window.onload 監聽器的最後，手動設定初始狀態 ---
     setThumbnailSize('medium');
     tocModal.addEventListener('click', (e) => {
         if (e.target === tocModal) {
@@ -711,6 +711,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
 // ==========================================================
-// === 關閉 DOMContentLoaded 監聽器
+// === 關閉 window.onload 監聽器
 // ==========================================================
-});
+};
