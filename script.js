@@ -1,6 +1,6 @@
 // ==========================================================
-// ===         *** 本地檔案 + window.onload ***
-// === 確保所有函式庫 (包含本地 pdf.min.js) 都載入後才執行
+// ===         *** 本地檔案 + pdf-encryptor ***
+// === 確保所有函式庫 (包含本地 pdf.min.js 和 pdf-encryptor) 都載入後才執行
 // ==========================================================
 window.onload = function() {
 
@@ -8,9 +8,8 @@ window.onload = function() {
     if (typeof pdfjsLib === 'undefined') {
         console.error("CRITICAL: pdfjsLib is not defined even after window.onload!");
         alert("錯誤：PDF 核心函式庫 (pdf.min.js) 載入失敗。請確認檔案是否存在於同資料夾。");
-        // 可以在此處停止執行或顯示更明顯的錯誤訊息
         document.body.innerHTML = '<h1 style="color: red; text-align: center; margin-top: 50px;">錯誤：無法載入 PDF 函式庫！</h1>';
-        return; 
+        return;
     }
 
     // --- 設定 workerSrc 指向本地檔案 ---
@@ -30,12 +29,19 @@ window.onload = function() {
     if (typeof PDFLib === 'undefined') {
         console.error("CRITICAL: PDFLib is not defined when onload executes!");
         alert("錯誤：PDF 編輯函式庫 (pdf-lib.min.js) 載入失敗，請檢查網路連線。");
-        return; 
+        return;
     }
      if (typeof fontkit === 'undefined') {
         console.error("CRITICAL: fontkit is not defined when onload executes!");
-        alert("警告：字型函式庫 (fontkit.umd.min.js) 載入失敗，目錄功能可能異常。");
-        // 仍然繼續執行
+        alert("錯誤：字型工具函式庫 (fontkit.umd.min.js) 載入失敗，請檢查網路連線。");
+        return; // fontkit 對於載入字型至關重要
+    }
+    // --- 新增：檢查 pdf-encryptor ---
+    if (typeof PDFEncryptor === 'undefined') {
+        console.error("CRITICAL: PDFEncryptor is not defined when onload executes!");
+        alert("錯誤：PDF 加密函式庫 (pdf-encryptor) 載入失敗，請檢查網路連線。");
+        // 加密功能將失效，但其他功能應可繼續
+        // return; // 可以選擇在這裡 return 完全停止
     }
 
 
@@ -73,7 +79,6 @@ window.onload = function() {
             const fileData = { name: file.name, file: file, pages: [], pdfDoc: null };
             try {
                 const arrayBuffer = await file.arrayBuffer();
-                // 使用 pdfjsLib (現在應該已定義)
                 const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
                 fileData.pdfDoc = pdf;
                 for (let i = 1; i <= pdf.numPages; i++) {
@@ -113,15 +118,15 @@ window.onload = function() {
 
             const items = textContent.items
                 .map(item => ({
-                    text: item.str ? item.str.trim() : '', // Add check for item.str
-                    y: item.transform ? item.transform[5] : 0, // Add check and default
-                    x: item.transform ? item.transform[4] : 0, // Add check and default
-                    height: item.height || 0, // Add check and default
+                    text: item.str ? item.str.trim() : '',
+                    y: item.transform ? item.transform[5] : 0,
+                    x: item.transform ? item.transform[4] : 0,
+                    height: item.height || 0,
                 }))
                 .filter(item => item.text.length > 0)
                 .sort((a, b) => b.y - a.y || a.x - b.x);
 
-            if (items.length === 0) { // Check again after filtering
+            if (items.length === 0) {
                  return `Page ${pageNum}`;
             }
 
@@ -139,10 +144,10 @@ window.onload = function() {
 
 
             let title = `Page ${pageNum}`;
-            if (lines.length > 0 && lines[0].length > 0) { // Ensure line is not empty
+            if (lines.length > 0 && lines[0].length > 0) {
                 let titleLineText = lines[0].map(item => item.text).join(' ');
                 
-                if (lines.length > 1 && lines[1].length > 0) { // Ensure line is not empty
+                if (lines.length > 1 && lines[1].length > 0) {
                     const firstLineY = lines[0][0].y;
                     const firstLineHeight = lines[0][0].height;
                     const secondLineY = lines[1][0].y;
@@ -153,7 +158,7 @@ window.onload = function() {
 
                 let cleanedTitle = titleLineText;
 
-                // --- Title cleaning logic (remains the same) ---
+                // --- Title cleaning logic ---
                 if (!/^\d+\s*年度/.test(cleanedTitle.trim())) {
                     cleanedTitle = cleanedTitle.replace(/^[\d\s.\-•]+\s*/, '');
                 }
@@ -190,7 +195,7 @@ window.onload = function() {
             return title;
         } catch (error) {
              console.error(`Error extracting title from page ${pageNum}:`, error);
-             return `Page ${pageNum}`; // Return default page number on error
+             return `Page ${pageNum}`;
         }
     }
 
@@ -283,7 +288,7 @@ window.onload = function() {
     }
 
     function deleteSourcePage(fileIndex, pageIndex) {
-        if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return; // Add boundary check
+        if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return;
         const pageToDelete = pdfFiles[fileIndex].pages[pageIndex];
         selectedPages = selectedPages.filter(p => !(p.type !== 'divider' && p.fileIndex === fileIndex && p.pageNum === pageToDelete.pageNum));
         pdfFiles[fileIndex].pages.splice(pageIndex, 1);
@@ -297,7 +302,7 @@ window.onload = function() {
 
     function togglePage(fileIndex, pageIndex, event) {
         if (isSourceEditMode) return;
-        if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return; // Add boundary check
+        if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return;
         
         const currentGlobalIndex = getGlobalPageIndex(fileIndex, pageIndex);
         if (event && event.shiftKey && lastSelectedIndex !== null) {
@@ -305,7 +310,7 @@ window.onload = function() {
             const end = Math.max(lastSelectedIndex, currentGlobalIndex);
             for (let i = start; i <= end; i++) {
                 const pos = getPageByGlobalIndex(i);
-                if (pos && pdfFiles[pos.fileIndex] && pdfFiles[pos.fileIndex].pages[pos.pageIndex]) { // Add boundary check
+                if (pos && pdfFiles[pos.fileIndex] && pdfFiles[pos.fileIndex].pages[pos.pageIndex]) {
                     const f = pdfFiles[pos.fileIndex];
                     const p = f.pages[pos.pageIndex];
                     if (!selectedPages.some(sp => sp.type !== 'divider' && sp.fileIndex === pos.fileIndex && sp.pageNum === p.pageNum)) {
@@ -331,7 +336,7 @@ window.onload = function() {
     function getGlobalPageIndex(fileIndex, pageIndex) {
         let count = 0;
         for (let i = 0; i < fileIndex; i++) {
-            if (pdfFiles[i]) { // Add check
+            if (pdfFiles[i]) {
                  count += pdfFiles[i].pages.length;
             }
         }
@@ -341,7 +346,7 @@ window.onload = function() {
     function getPageByGlobalIndex(globalIndex) {
         let count = 0;
         for (let fileIndex = 0; fileIndex < pdfFiles.length; fileIndex++) {
-             if (pdfFiles[fileIndex]) { // Add check
+             if (pdfFiles[fileIndex]) {
                  const file = pdfFiles[fileIndex];
                  if (globalIndex < count + file.pages.length) {
                     return { fileIndex, pageIndex: globalIndex - count };
@@ -380,7 +385,7 @@ window.onload = function() {
             selectedPages.push({
                 type: 'divider',
                 firstLine: title.trim(),
-                id: Date.now() // Unique ID for key
+                id: Date.now()
             });
             renderSelectedPages();
         }
@@ -392,21 +397,19 @@ window.onload = function() {
             return;
         }
         sourcePages.innerHTML = pdfFiles.map((file, fileIndex) => {
-             if (!file) return ''; // Add check for null file
+             if (!file) return '';
              const pagesHtml = viewMode === 'grid' 
                 ? `<div class="pages-grid">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'grid')).join('')}</div>`
                 : `<div class="pages-list">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'list')).join('')}</div>`;
-             return `<div class="pdf-file"><div class="pdf-file-header"><div class="pdf-file-name">${file.name || 'Unknown File'}</div></div>${pagesHtml}</div>`; // Add default name
+             return `<div class="pdf-file"><div class="pdf-file-header"><div class="pdf-file-name">${file.name || 'Unknown File'}</div></div>${pagesHtml}</div>`;
         }).join('');
 
-        // Re-render canvases after HTML update
         pdfFiles.forEach((file, fileIndex) => {
              if (file) {
                  file.pages.forEach((page, pageIndex) => {
                      const canvas = document.getElementById(`source_${fileIndex}_${pageIndex}`);
-                     if (canvas && page.canvas) { // Ensure canvas element and page data exist
+                     if (canvas && page.canvas) {
                         const ctx = canvas.getContext('2d');
-                        // Ensure dimensions are valid before drawing
                         if (page.canvas.width > 0 && page.canvas.height > 0) {
                              canvas.width = page.canvas.width;
                              canvas.height = page.canvas.height;
@@ -422,7 +425,6 @@ window.onload = function() {
 
 
     function renderPageItem(fileIndex, pageIndex, type) {
-        // Add boundary checks
         if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return '';
         const page = pdfFiles[fileIndex].pages[pageIndex];
         const isSelected = selectedPages.some(p => p.type !== 'divider' && p.fileIndex === fileIndex && p.pageNum === page.pageNum);
@@ -434,9 +436,9 @@ window.onload = function() {
                     <button class="delete-btn" onclick="deleteSourcePage(${fileIndex}, ${pageIndex})">✕</button>
                     <canvas id="source_${fileIndex}_${pageIndex}"></canvas>
                     <div class="page-number">第 ${page.pageNum || '?'} 頁</div> 
-                </div>`; // Add default page number
-        } else { // list
-             const title = page.firstLine || `Page ${page.pageNum || '?'}`; // Default title
+                </div>`;
+        } else {
+             const title = page.firstLine || `Page ${page.pageNum || '?'}`;
             return `
                 <div class="page-list-item ${isSelected ? 'selected' : ''}" ${clickAction} title="${title}">
                     <div class="page-list-text">${title}</div>
@@ -453,7 +455,7 @@ window.onload = function() {
             return;
         }
         selectedPagesContainer.innerHTML = selectedPages.map((item, index) => {
-             if (!item) return ''; // Add boundary check
+             if (!item) return '';
             if (item.type === 'divider') {
                 return `
                     <div class="selected-divider-item" draggable="true" data-index="${index}">
@@ -463,11 +465,10 @@ window.onload = function() {
                             <button class="btn btn-danger" onclick="removeSelectedPage(${index})">✕</button>
                         </div>
                     </div>
-                `; // Add default title
+                `;
             }
-            // Default is a page item
-             const title = item.firstLine || `Page ${item.pageNum || '?'}`; // Default title
-             const source = `${item.fileName || 'Unknown File'} - 第 ${item.pageNum || '?'} 頁`; // Default source
+             const title = item.firstLine || `Page ${item.pageNum || '?'}`;
+             const source = `${item.fileName || 'Unknown File'} - 第 ${item.pageNum || '?'} 頁`;
             return `
                 <div class="selected-page-item" draggable="true" data-index="${index}">
                     <span class="drag-handle">⋮⋮</span>
@@ -483,14 +484,11 @@ window.onload = function() {
             `;
         }).join('');
 
-        // Re-render canvases after HTML update
         selectedPages.forEach((item, index) => {
-             // Add checks
              if (item && item.type !== 'divider') {
                  const canvas = document.getElementById(`selected_${index}`);
-                 if (canvas && item.canvas) { // Ensure canvas element and item data exist
+                 if (canvas && item.canvas) {
                      const ctx = canvas.getContext('2d');
-                     // Ensure dimensions are valid before drawing
                      if (item.canvas.width > 0 && item.canvas.height > 0) {
                          canvas.width = item.canvas.width;
                          canvas.height = item.canvas.height;
@@ -516,25 +514,25 @@ window.onload = function() {
             item.addEventListener('dragstart', (e) => {
                 draggedElement = item;
                 item.classList.add('dragging');
-                if (e.dataTransfer) { // Check if dataTransfer exists
+                if (e.dataTransfer) {
                     e.dataTransfer.effectAllowed = 'move';
                 }
             });
             item.addEventListener('dragend', () => {
-                 if(draggedElement) draggedElement.classList.remove('dragging'); // Add check
-                 draggedElement = null; // Reset draggedElement
+                 if(draggedElement) draggedElement.classList.remove('dragging');
+                 draggedElement = null;
             });
             item.addEventListener('dragover', (e) => {
-                e.preventDefault(); // Necessary to allow dropping
-                if (!draggedElement) return; // Don't do anything if nothing is being dragged
+                e.preventDefault();
+                if (!draggedElement) return;
                 const afterElement = getDragAfterElement(selectedPagesContainer, e.clientY);
-                try { // Add try-catch for potential DOM manipulation errors
+                try {
                     if (afterElement == null) {
-                         if (selectedPagesContainer.lastChild !== draggedElement) { // Prevent appending if already last
+                         if (selectedPagesContainer.lastChild !== draggedElement) {
                             selectedPagesContainer.appendChild(draggedElement);
                         }
                     } else {
-                         if (afterElement !== draggedElement && afterElement.previousSibling !== draggedElement) { // Prevent inserting before/after itself
+                         if (afterElement !== draggedElement && afterElement.previousSibling !== draggedElement) {
                             selectedPagesContainer.insertBefore(draggedElement, afterElement);
                         }
                     }
@@ -545,83 +543,65 @@ window.onload = function() {
 
             item.addEventListener('drop', (e) => {
                 e.preventDefault();
-                 if (!draggedElement) return; // Ensure an element was actually dragged
+                 if (!draggedElement) return;
 
-                 // Get the original index BEFORE potential DOM reordering during dragover
                  const fromIndexAttr = draggedElement.getAttribute('data-index');
                  if (fromIndexAttr === null) {
                     console.error("Dragged element missing data-index attribute.");
-                    return; // Abort if index is missing
+                     renderSelectedPages(); // Attempt to restore visual state
+                    return;
                  }
                  const fromIndex = parseInt(fromIndexAttr, 10);
 
-
-                 // Get the new index based on the final position in the DOM
                  const currentChildren = Array.from(selectedPagesContainer.children);
                  const toIndex = currentChildren.indexOf(draggedElement);
 
-                 // Check for valid indices
                  if (isNaN(fromIndex) || fromIndex < 0 || fromIndex >= selectedPages.length || toIndex < 0) {
                      console.error("Invalid index during drop:", { fromIndex, toIndex, selectedPagesLength: selectedPages.length });
-                     // Reset visual state and abort data update if indices are bad
-                     draggedElement.classList.remove('dragging');
-                     renderSelectedPages(); // Re-render to fix visual state
+                     renderSelectedPages();
                      return;
                  }
 
-
-                 // Only update array if indices are different
                  if (fromIndex !== toIndex) {
-                    // Update the underlying selectedPages array
                     const [movedItem] = selectedPages.splice(fromIndex, 1);
-                    if (movedItem) { // Ensure splice returned an item
+                    if (movedItem) {
                          selectedPages.splice(toIndex, 0, movedItem);
                      } else {
                          console.error("Splice failed to return the moved item.");
-                         renderSelectedPages(); // Re-render to fix visual state
-                         return; // Abort if splice failed
+                         renderSelectedPages();
+                         return;
                     }
                  }
-
-                // Always re-render to update data-index attributes and ensure consistency
-                renderSelectedPages();
+                renderSelectedPages(); // Always re-render
             });
         });
     }
 
     function getDragAfterElement(container, y) {
-        // Get only direct children that are draggable and not the one being dragged
         const draggableElements = [...container.children].filter(child =>
             child.matches('.selected-page-item, .selected-divider-item') && !child.classList.contains('dragging')
         );
 
         return draggableElements.reduce((closest, child) => {
             const box = child.getBoundingClientRect();
-             // Calculate midpoint of the element
             const midpoint = box.top + box.height / 2;
-             // Calculate offset of the cursor (y) from the element's midpoint
             const offset = y - midpoint;
-
-             // Find the element immediately *below* the cursor
-             // We want the one with the smallest positive offset (closest below)
-            if (offset > 0 && offset < closest.offset) {
+            if (offset > 0 && offset < closest.offset) { // Find closest element *below* cursor
                 return { offset: offset, element: child };
             } else {
                 return closest;
             }
-         }, { offset: Number.POSITIVE_INFINITY }).element; // Start with positive infinity
-         // If no element is found below (cursor is at the bottom or container empty),
-         // this returns `undefined`, which means appendChild should be used.
+         }, { offset: Number.POSITIVE_INFINITY }).element;
     }
 
 
     function openTocEditor() {
-        const pageItems = selectedPages.filter(p => p && p.type !== 'divider'); // Add check for p
+        const pageItems = selectedPages.filter(p => p && p.type !== 'divider');
         if (pageItems.length === 0) {
             alert('請先選擇至少一個頁面才能編輯目錄。');
             return;
         }
-        const titles = pageItems.map(p => p.firstLine || `Page ${p.pageNum || '?'}`).join('\n'); // Add default title
+        const titles = pageItems.map(p => p.firstLine || `Page ${p.pageNum || '?'}`).join('\n');
         tocTextarea.value = titles;
         tocModal.style.display = 'flex';
     }
@@ -632,15 +612,15 @@ window.onload = function() {
 
     function saveToc() {
         const newTitles = tocTextarea.value.split('\n');
-        const pageItems = selectedPages.filter(p => p && p.type !== 'divider'); // Add check for p
+        const pageItems = selectedPages.filter(p => p && p.type !== 'divider');
         if (newTitles.length !== pageItems.length) {
             alert(`錯誤：目錄行數 (${newTitles.length}) 與選擇的頁數 (${pageItems.length}) 不符，請檢查後再儲存。`);
             return;
         }
         let titleIndex = 0;
         selectedPages.forEach(item => {
-            if (item && item.type !== 'divider') { // Add check for item
-                item.firstLine = newTitles[titleIndex] || `Page ${item.pageNum || '?'}`; // Add default title if line is empty
+            if (item && item.type !== 'divider') {
+                item.firstLine = newTitles[titleIndex] || `Page ${item.pageNum || '?'}`;
                 titleIndex++;
             }
         });
@@ -649,15 +629,22 @@ window.onload = function() {
     }
 
     async function generatePDF() {
-         // Check again inside the function in case libraries failed silently
          if (typeof PDFLib === 'undefined' || typeof PDFLib.PDFDocument === 'undefined') {
             console.error("PDFLib not available in generatePDF");
             alert("錯誤：無法生成 PDF，編輯函式庫載入失敗。");
             return;
         }
+         // 新增：檢查 PDFEncryptor 是否可用
+         const useEncryption = addEncryptCheckbox.checked;
+         if (useEncryption && typeof PDFEncryptor === 'undefined') {
+             console.error("PDFEncryptor not available in generatePDF");
+             alert("錯誤：無法加密 PDF，加密函式庫載入失敗。請取消勾選加密或檢查網路連線。");
+             return; // 如果要加密但函式庫不在，則停止
+         }
+
         const { PDFDocument, rgb, StandardFonts } = PDFLib;
 
-        const pageItems = selectedPages.filter(p => p && p.type !== 'divider'); // Add check for p
+        const pageItems = selectedPages.filter(p => p && p.type !== 'divider');
         if (pageItems.length === 0) {
             progress.textContent = '⚠️ 請至少選擇一個頁面';
             progress.classList.add('active', 'error');
@@ -674,32 +661,22 @@ window.onload = function() {
 
             try {
                 progress.textContent = '正在載入中文字型...';
-                
-                // ==========================================================
-                // ===             *** 字型載入修正 ***
-                // === 改為載入本地的 NotoSansTC-Regular.otf
-                // ==========================================================
-                const fontUrl = './fonts/NotoSansTC-Regular.ttf'; 
-                
+                const fontUrl = './fonts/NotoSansTC-Regular.ttf'; // 載入本地字型
                 const fontBytes = await fetch(fontUrl).then(res => {
-                    if (!res.ok) throw new Error(`字型檔案 (${fontUrl}) 載入失敗！ status: ${res.status}`); // 更明確的錯誤
+                    if (!res.ok) throw new Error(`字型檔案 (${fontUrl}) 載入失敗！ status: ${res.status}`);
                     return res.arrayBuffer();
                 });
                 
-                // Check fontkit again
                 if (typeof fontkit === 'undefined') {
-                     console.error("fontkit not loaded, cannot embed custom font."); // 變成錯誤，因為本地載入需要它
                      throw new Error("fontkit 函式庫載入失敗");
-                } else {
-                    newPdf.registerFontkit(fontkit); 
-                    customFont = await newPdf.embedFont(fontBytes);
-                     progress.textContent = '中文字型載入成功!'; // Add success message
-                     await new Promise(resolve => setTimeout(resolve, 500)); // Short pause
                 }
+                newPdf.registerFontkit(fontkit); 
+                customFont = await newPdf.embedFont(fontBytes);
+                progress.textContent = '中文字型載入成功!';
+                await new Promise(resolve => setTimeout(resolve, 500));
             } catch (fontError) {
                 console.error("中文字型載入失敗:", fontError);
-                alert("警告：中文字型下載失敗，目錄將使用英文字型顯示（中文會變亂碼）。");
-                // Fallback font
+                 alert(`警告：無法載入本地字型檔案 (${fontError.message})。目錄將使用英文字型顯示（中文會變亂碼）。`);
                  try {
                      customFont = await newPdf.embedFont(StandardFonts.Helvetica);
                  } catch (embedError) {
@@ -707,7 +684,7 @@ window.onload = function() {
                      alert("致命錯誤：無法嵌入預設字型。");
                      progress.textContent = '❌ 生成失敗：無法嵌入字型';
                      progress.classList.add('active', 'error');
-                     return; // Abort if even fallback fails
+                     return;
                  }
             }
             
@@ -716,76 +693,42 @@ window.onload = function() {
 
             if (addToc) {
                 progress.textContent = '正在建立目錄頁...';
-                const tocPage = newPdf.addPage([842, 595]); // A4 Landscape? Ensure size is correct.
+                const tocPage = newPdf.addPage([842, 595]);
                 tocPage.drawText('目錄', { x: 50, y: 595 - 50, size: 18, font: customFont, color: rgb(0,0,0) });
                 let yPosition = 595 - 90;
                 let pageCounterForToc = 0;
 
-                for (const item of selectedPages) { // Use for...of for potential async later
-                     if (!item) continue; // Skip null items
-
-                     // Check if yPosition is too low, add new TOC page if needed
+                for (const item of selectedPages) {
+                     if (!item) continue;
                      if (yPosition < 40) {
-                         // TODO: Implement adding a new TOC page if content overflows
-                         console.warn("TOC content might overflow, add new page logic needed.");
-                         break; // Stop adding items for now
+                         console.warn("TOC content might overflow"); break;
                      }
-
-
                     if (item.type === 'divider') {
                         yPosition -= 10;
                         tocPage.drawText(item.firstLine || 'New Section', { x: 50, y: yPosition, size: 14, font: customFont, color: rgb(0,0,0) });
                         yPosition -= 25;
                     } else {
                         pageCounterForToc++;
-                         const title = item.firstLine || `Page ${item.pageNum || '?'}`; // Default title
+                         const title = item.firstLine || `Page ${item.pageNum || '?'}`;
                         const pageNumStr = `${pageCounterForToc + pageOffset}`; 
-
-                        const leftMargin = 70;
-                        const rightMargin = 50;
-                        const fontSize = 12;
+                        const leftMargin = 70; const rightMargin = 50; const fontSize = 12;
                         const pageContentWidth = tocPage.getWidth() - leftMargin - rightMargin;
-
-                        let pageNumWidth = 0;
-                        try {
-                             pageNumWidth = customFont.widthOfTextAtSize(pageNumStr, fontSize);
-                         } catch (e) { console.error("Error getting pageNum width:", e); }
-
-
+                        let pageNumWidth = 0; let titleWidth = 0; let dotWidth = 0;
+                        try { pageNumWidth = customFont.widthOfTextAtSize(pageNumStr, fontSize); } catch (e) { console.error("Err getting pageNum width:", e); }
                         let truncatedTitle = title;
-                        let titleWidth = 0;
-                         try {
-                             titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize);
-                         } catch (e) { console.error("Error getting title width:", e); }
-
+                        try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize); } catch (e) { console.error("Err getting title width:", e); }
                         const minDotSpace = 20;
-
-                        // Truncate title logic
                         while (titleWidth > 0 && pageContentWidth > 0 && (titleWidth + pageNumWidth + minDotSpace > pageContentWidth) && truncatedTitle.length > 5) {
                             truncatedTitle = truncatedTitle.slice(0, -2) + '…';
-                            try {
-                                titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize);
-                            } catch (e) {
-                                 console.error("Error getting truncated title width:", e);
-                                 titleWidth = 0; // Prevent infinite loop on error
-                            }
+                            try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize); } catch (e) { titleWidth = 0; }
                         }
-
-                        // Draw text elements
                         tocPage.drawText(truncatedTitle, { x: leftMargin, y: yPosition, size: fontSize, font: customFont, color: rgb(0,0,0) });
                         tocPage.drawText(pageNumStr, { x: tocPage.getWidth() - rightMargin - pageNumWidth, y: yPosition, size: fontSize, font: customFont, color: rgb(0,0,0) });
-
-                         // Draw dots logic
-                         let dotWidth = 0;
-                         try {
-                            dotWidth = customFont.widthOfTextAtSize('.', fontSize);
-                         } catch (e) { console.error("Error getting dot width:", e); }
-
+                        try { dotWidth = customFont.widthOfTextAtSize('.', fontSize); } catch (e) { console.error("Err getting dot width:", e); }
                          if (dotWidth > 0) {
                             const dotStartX = leftMargin + titleWidth + 5;
                             const dotEndX = tocPage.getWidth() - rightMargin - pageNumWidth - 5;
                             const availableDotSpace = dotEndX - dotStartX;
-
                              if (availableDotSpace > dotWidth) {
                                 const numDots = Math.floor(availableDotSpace / dotWidth);
                                 const dotString = '.'.repeat(numDots);
@@ -798,83 +741,87 @@ window.onload = function() {
             }
 
             let pageCounterForContent = 0;
-            for (const item of selectedPages) { // Use for...of
-                if (!item || item.type === 'divider') continue; // Skip null/divider items
-
+            for (const item of selectedPages) {
+                if (!item || item.type === 'divider') continue;
                 pageCounterForContent++;
                 progress.textContent = `正在合併頁面 (${pageCounterForContent}/${pageItems.length})...`;
-                
-                // Ensure source file data is valid
                 if (item.fileIndex === undefined || item.fileIndex === null || !pdfFiles[item.fileIndex] || !pdfFiles[item.fileIndex].file || !item.pageNum) {
-                     console.error("Missing data for selected page item:", item);
-                     continue; // Skip this page if data is bad
+                     console.error("Missing data for page item:", item); continue;
                 }
-
-
                 const sourceFile = pdfFiles[item.fileIndex];
                 try {
                     const freshArrayBuffer = await sourceFile.file.arrayBuffer();
-                     // Add load options for robustness
-                    const sourcePdf = await PDFDocument.load(freshArrayBuffer, {
-                        ignoreEncryption: true, // Attempt to load even if encrypted (might fail later)
-                        updateMetadata: false
-                    });
-
-                     // Check if pageNum is valid for the source PDF
+                    const sourcePdf = await PDFDocument.load(freshArrayBuffer, { ignoreEncryption: true, updateMetadata: false });
                      if (item.pageNum < 1 || item.pageNum > sourcePdf.getPageCount()) {
-                         console.error(`Invalid page number ${item.pageNum} for file ${sourceFile.name} with ${sourcePdf.getPageCount()} pages.`);
-                         continue; // Skip invalid page
+                         console.error(`Invalid page ${item.pageNum} for ${sourceFile.name}`); continue;
                      }
-
                     const [copiedPage] = await newPdf.copyPages(sourcePdf, [item.pageNum - 1]);
                     newPdf.addPage(copiedPage);
-                    
                     const newPageNumber = `${pageCounterForContent + pageOffset}`;
                     const { width, height } = copiedPage.getSize();
-                     // Add checks for valid dimensions
                      if (width > 0 && height > 0) {
-                        copiedPage.drawText(newPageNumber, {
-                            x: width - 40,
-                            y: 30,
-                            size: 10,
-                            font: customFont, // Use the potentially fallback font
-                            color: rgb(0, 0, 0)
-                        });
-                     } else {
-                         console.warn(`Invalid dimensions for page ${pageCounterForContent}`);
-                    }
+                        copiedPage.drawText(newPageNumber, { x: width - 40, y: 30, size: 10, font: customFont, color: rgb(0, 0, 0) });
+                     } else { console.warn(`Invalid dimensions page ${pageCounterForContent}`); }
                 } catch(loadError) {
-                    console.error(`Error loading or copying page ${item.pageNum} from ${sourceFile.name}:`, loadError);
-                     alert(`錯誤：無法載入或複製檔案 "${sourceFile.name}" 的第 ${item.pageNum} 頁。檔案可能已損毀或加密。`);
-                    // Optionally decide whether to continue or abort PDF generation
+                    console.error(`Error loading/copying page ${item.pageNum} from ${sourceFile.name}:`, loadError);
+                     alert(`錯誤：無法處理檔案 "${sourceFile.name}" 第 ${item.pageNum} 頁。`);
                 }
             }
 
             progress.textContent = '正在儲存 PDF...';
             
+            // 先使用 pdf-lib 生成基礎 PDF 的 bytes
+            let pdfBytes = await newPdf.save(); // No saveOptions needed here anymore
+
             // ==========================================================
-            // ===            *** 最終加密修正 *** ===
+            // ===         *** 使用 pdf-encryptor 加密 ***
             // ==========================================================
-            const saveOptions = {};
-            if (addEncryptCheckbox.checked) {
-                const userPassword = prompt("請輸入 PDF [開啟] 密碼（若取消則不加密）：");
-                if (userPassword && userPassword.trim() !== "") {
-                    saveOptions.userPassword = userPassword;
-                    saveOptions.ownerPassword = `owner-${userPassword}-${Date.now()}`; 
-                    progress.textContent = '正在加密並儲存...';
+            if (useEncryption) { // 變數 useEncryption 已在函式開頭定義
+                 if (typeof PDFEncryptor === 'undefined') { // 再次檢查以防萬一
+                     throw new Error("PDFEncryptor is not available for encryption.");
+                 }
+                const password = prompt("請輸入 PDF [開啟] 密碼（若取消則不加密）：");
+                if (password && password.trim() !== "") {
+                    progress.textContent = '正在加密 PDF...';
+                    try {
+                        const encryptedBytes = await PDFEncryptor.encrypt({
+                            pdf: pdfBytes,         // 使用 pdf-lib 生成的 Uint8Array
+                            password: password,    // 使用者輸入的開啟密碼
+                            // ownerPassword: password, // pdf-encryptor 建議 owner 不同，不設則隨機
+                             permissions: {      // 設定權限
+                                 printing: 'highResolution', // 允許高品質列印
+                                 modifying: false,          // 不允許修改
+                                 copying: false,            // 不允許複製內容
+                                 annotating: false,         // 不允許註解
+                                 fillingForms: false,       // 不允許填表
+                                 contentAccessibility: false,// 不允許內容提取 (輔助)
+                                 documentAssembly: false    // 不允許頁面操作
+                             }
+                        });
+                        pdfBytes = encryptedBytes; // 將 pdfBytes 替換為加密後的 bytes
+                        progress.textContent = '加密完成，正在準備下載...';
+                    } catch (encryptionError) {
+                        console.error("PDF 加密失敗:", encryptionError);
+                        alert(`PDF 加密失敗: ${encryptionError.message}`);
+                        // 決定是否繼續下載未加密版本或停止
+                        // progress.textContent = '❌ 加密失敗，將下載未加密版本...';
+                        // 或者直接 return
+                         progress.textContent = '❌ 加密失敗';
+                         progress.classList.add('active', 'error');
+                         return; // 中止執行
+                    }
                 } else {
                     alert("未輸入密碼，將不進行加密。");
                 }
             }
             // ==========================================================
             
-            const pdfBytes = await newPdf.save(saveOptions);
-
+            // --- 下載邏輯 (使用最終的 pdfBytes) ---
             const blob = new Blob([pdfBytes], { type: 'application/pdf' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.style.display = 'none'; // Hide the link
+            a.style.display = 'none';
 
             const defaultFileName = '重組後的PDF_' + new Date().toISOString().slice(0, 10) + '.pdf';
             let finalFileName = prompt("請確認檔案名稱：", defaultFileName);
@@ -884,7 +831,6 @@ window.onload = function() {
                 progress.classList.add('active', 'error');
                 setTimeout(() => {
                     progress.classList.remove('active', 'error');
-                    // Clean up URL object
                     if (url) URL.revokeObjectURL(url);
                 }, 3000);
                 return;
@@ -897,24 +843,20 @@ window.onload = function() {
             document.body.appendChild(a);
             a.click();
             
-            // Clean up after download starts
             setTimeout(() => {
                  try {
                      document.body.removeChild(a);
                      if (url) URL.revokeObjectURL(url);
-                 } catch (cleanupError) {
-                     console.error("Error during cleanup:", cleanupError);
-                 }
-            }, 100); // Short delay is usually enough
+                 } catch (cleanupError) { console.error("Error during cleanup:", cleanupError); }
+            }, 100);
 
             progress.textContent = '✅ PDF 生成成功！';
             progress.classList.add('success');
             setTimeout(() => progress.classList.remove('active', 'success'), 5000);
         } catch (error) {
-             console.error('生成 PDF 時發生錯誤：', error); // Log the full error
+             console.error('生成 PDF 時發生錯誤：', error);
             progress.textContent = '❌ 生成失敗：' + error.message;
             progress.classList.add('active', 'error');
-             // Consider adding a longer timeout for error messages
              setTimeout(() => progress.classList.remove('active', 'error'), 8000);
         }
     }
