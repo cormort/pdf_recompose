@@ -4,12 +4,9 @@
 // ==========================================================
 window.onload = function() {
 
-    // --- 檢查 pdfjsLib 是否已定義 ---
-    if (typeof pdfjsLib === 'undefined') {
-        console.error("CRITICAL: pdfjsLib is not defined even after window.onload!");
-        alert("錯誤：PDF 核心函式庫 (pdf.min.js) 載入失敗。請確認檔案是否存在於同資料夾。");
-        document.body.innerHTML = '<h1 style="color: red; text-align: center; margin-top: 50px;">錯誤：無法載入 PDF 函式庫！</h1>';
-        return;
+    // --- 新增:檢查 pdf-encryptor (改為非強制) ---
+    if (typeof PDFEncryptor === 'undefined') {
+        console.warn("WARNING: PDFEncryptor is not defined. Encryption will use pdf-lib's built-in method.");
     }
 
     // --- 設定 workerSrc 指向本地檔案 ---
