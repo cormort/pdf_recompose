@@ -638,7 +638,7 @@ window.onload = function() {
 
             try {
                 progress.textContent = '正在載入中文字型...';
-                const fontUrl = './NotoSansTC-Regular.otf'; // 載入本地字型
+                const fontUrl = './fonts/NotoSansTC-Regular.ttf'; // 載入本地字型
                 const fontBytes = await fetch(fontUrl).then(res => {
                     if (!res.ok) throw new Error(`字型檔案 (${fontUrl}) 載入失敗！ status: ${res.status}`);
                     return res.arrayBuffer();
