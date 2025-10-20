@@ -1,13 +1,8 @@
 // ==========================================================
-// ===         *** 本地檔案 + pdf-encryptor ***
-// === 確保所有函式庫 (包含本地 pdf.min.js 和 pdf-encryptor) 都載入後才執行
+// ===         *** 本地檔案 ***
+// === 確保所有函式庫 (包含本地 pdf.min.js) 都載入後才執行
 // ==========================================================
 window.onload = function() {
-
-    // --- 新增:檢查 pdf-encryptor (改為非強制) ---
-    if (typeof PDFEncryptor === 'undefined') {
-        console.warn("WARNING: PDFEncryptor is not defined. Encryption will use pdf-lib's built-in method.");
-    }
 
     // --- 設定 workerSrc 指向本地檔案 ---
     pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.js';
@@ -33,14 +28,6 @@ window.onload = function() {
         alert("錯誤：字型工具函式庫 (fontkit.umd.min.js) 載入失敗，請檢查網路連線。");
         return; // fontkit 對於載入字型至關重要
     }
-    // --- 新增：檢查 pdf-encryptor ---
-    if (typeof PDFEncryptor === 'undefined') {
-        console.error("CRITICAL: PDFEncryptor is not defined when onload executes!");
-        alert("錯誤：PDF 加密函式庫 (pdf-encryptor) 載入失敗，請檢查網路連線。");
-        // 加密功能將失效，但其他功能應可繼續
-        // return; // 可以選擇在這裡 return 完全停止
-    }
-
 
     const uploadArea = document.getElementById('uploadArea');
     const fileInput = document.getElementById('fileInput');
@@ -53,7 +40,7 @@ window.onload = function() {
     const tocTextarea = document.getElementById('tocTextarea');
 
     const addTocCheckbox = document.getElementById('addTocCheckbox');
-    const addEncryptCheckbox = document.getElementById('addEncryptCheckbox');
+    // 已移除 addEncryptCheckbox
 
     uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('drag-over'); });
     uploadArea.addEventListener('dragleave', () => { uploadArea.classList.remove('drag-over'); });
@@ -631,13 +618,6 @@ window.onload = function() {
             alert("錯誤：無法生成 PDF，編輯函式庫載入失敗。");
             return;
         }
-         // 新增：檢查 PDFEncryptor 是否可用
-         const useEncryption = addEncryptCheckbox.checked;
-         if (useEncryption && typeof PDFEncryptor === 'undefined') {
-             console.error("PDFEncryptor not available in generatePDF");
-             alert("錯誤：無法加密 PDF，加密函式庫載入失敗。請取消勾選加密或檢查網路連線。");
-             return; // 如果要加密但函式庫不在，則停止
-         }
 
         const { PDFDocument, rgb, StandardFonts } = PDFLib;
 
@@ -767,51 +747,10 @@ window.onload = function() {
 
             progress.textContent = '正在儲存 PDF...';
             
-            // 先使用 pdf-lib 生成基礎 PDF 的 bytes
-            let pdfBytes = await newPdf.save(); // No saveOptions needed here anymore
+            // 使用 pdf-lib 生成 PDF 的 bytes
+            let pdfBytes = await newPdf.save();
 
-            // ==========================================================
-            // ===         *** 使用 pdf-encryptor 加密 ***
-            // ==========================================================
-            if (useEncryption) { // 變數 useEncryption 已在函式開頭定義
-                 if (typeof PDFEncryptor === 'undefined') { // 再次檢查以防萬一
-                     throw new Error("PDFEncryptor is not available for encryption.");
-                 }
-                const password = prompt("請輸入 PDF [開啟] 密碼（若取消則不加密）：");
-                if (password && password.trim() !== "") {
-                    progress.textContent = '正在加密 PDF...';
-                    try {
-                        const encryptedBytes = await PDFEncryptor.encrypt({
-                            pdf: pdfBytes,         // 使用 pdf-lib 生成的 Uint8Array
-                            password: password,    // 使用者輸入的開啟密碼
-                            // ownerPassword: password, // pdf-encryptor 建議 owner 不同，不設則隨機
-                             permissions: {      // 設定權限
-                                 printing: 'highResolution', // 允許高品質列印
-                                 modifying: false,          // 不允許修改
-                                 copying: false,            // 不允許複製內容
-                                 annotating: false,         // 不允許註解
-                                 fillingForms: false,       // 不允許填表
-                                 contentAccessibility: false,// 不允許內容提取 (輔助)
-                                 documentAssembly: false    // 不允許頁面操作
-                             }
-                        });
-                        pdfBytes = encryptedBytes; // 將 pdfBytes 替換為加密後的 bytes
-                        progress.textContent = '加密完成，正在準備下載...';
-                    } catch (encryptionError) {
-                        console.error("PDF 加密失敗:", encryptionError);
-                        alert(`PDF 加密失敗: ${encryptionError.message}`);
-                        // 決定是否繼續下載未加密版本或停止
-                        // progress.textContent = '❌ 加密失敗，將下載未加密版本...';
-                        // 或者直接 return
-                         progress.textContent = '❌ 加密失敗';
-                         progress.classList.add('active', 'error');
-                         return; // 中止執行
-                    }
-                } else {
-                    alert("未輸入密碼，將不進行加密。");
-                }
-            }
-            // ==========================================================
+            // --- 已移除加密邏輯 ---
             
             // --- 下載邏輯 (使用最終的 pdfBytes) ---
             const blob = new Blob([pdfBytes], { type: 'application/pdf' });
