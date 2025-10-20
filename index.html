@@ -10,8 +10,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
     <script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
     
-    <script src="https://unpkg.com/pdf-encryptor@1.0.7/dist/index.umd.js"></script>
-
+    <!-- 已移除加密函式庫 -->
 
     <link rel="stylesheet" href="style.css">
 </head>
@@ -37,7 +36,7 @@
         </div>
 
         <div class="note">
-            💡 提示：生成的 PDF 會保留原始文字，可以正常搜尋和複製。目錄使用思源黑體以支援中文顯示。加密使用 AES-256 標準。
+            💡 提示：生成的 PDF 會保留原始文字，可以正常搜尋和複製。目錄使用思源黑體以支援中文顯示。
         </div>
 
         <div class="progress" id="progress">
@@ -49,10 +48,7 @@
                 <input type="checkbox" id="addTocCheckbox" checked>
                 <label for="addTocCheckbox">新增目錄頁 (會放在第一頁)</label>
             </div>
-            <div>
-                <input type="checkbox" id="addEncryptCheckbox">
-                <label for="addEncryptCheckbox">🔒 啟用 PDF 加密 (儲存時會詢問密碼)</label>
-            </div>
+            <!-- 已移除加密選項 -->
         </div>
 
         <button class="btn btn-success" id="generateBtn" onclick="generatePDF()">
