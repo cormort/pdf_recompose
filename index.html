@@ -9,14 +9,84 @@
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
     <script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
-    
-    <!-- 已移除加密函式庫 -->
 
     <link rel="stylesheet" href="style.css">
+
+    <style>
+        /* --- 通知區域 --- */
+        #notification {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            padding: 12px;
+            border-radius: 5px;
+            color: #fff;
+            font-weight: bold;
+            text-align: center;
+            z-index: 2000;
+            opacity: 0;
+            transform: translateY(-20px);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            pointer-events: none; /* 讓它可以被點穿 */
+        }
+        #notification.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        #notification.error {
+            background-color: #e74c3c; /* 紅色 */
+        }
+        #notification.success {
+            background-color: #2ecc71; /* 綠色 */
+        }
+        #notification.info {
+            background-color: #3498db; /* 藍色 */
+        }
+
+        /* --- 旋轉按鈕 --- */
+        .btn-rotate {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+            padding: 4px;
+        }
+        .btn-rotate:hover {
+            opacity: 1;
+        }
+        .selected-page-item .page-actions {
+            display: flex; /* 讓旋轉和刪除按鈕並排 */
+            align-items: center;
+        }
+
+        /* --- 預覽 Modal --- */
+        .modal-content.large {
+            width: 90vw;
+            height: 90vh;
+            max-width: 1200px;
+        }
+        .preview-container {
+            flex-grow: 1; /* 佔滿剩餘空間 */
+            background: #555;
+            margin-bottom: 15px;
+            overflow: hidden;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        #previewFrame {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
 </head>
 <body>
     <div class="sidebar">
         <h2>📄 PDF 頁面重組工具</h2>
+
+        <div id="notification"></div>
         
         <div class="upload-area" id="uploadArea">
             <p style="margin-bottom: 10px;">📁 拖曳 PDF 檔案到這裡</p>
@@ -48,7 +118,6 @@
                 <input type="checkbox" id="addTocCheckbox" checked>
                 <label for="addTocCheckbox">新增目錄頁 (會放在第一頁)</label>
             </div>
-            <!-- 已移除加密選項 -->
         </div>
 
         <button class="btn btn-success" id="generateBtn" onclick="generatePDF()">
@@ -98,6 +167,21 @@
             <div class="modal-actions">
                 <button class="btn" onclick="closeTocEditor()">取消</button>
                 <button class="btn btn-primary" onclick="saveToc()">儲存變更</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="previewModal">
+        <div class="modal-content large">
+            <h3>預覽 PDF</h3>
+            <div class="preview-container">
+                <iframe id="previewFrame" frameborder="0"></iframe>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" onclick="closePreview()">取消</button>
+                <button class="btn btn-success" id="downloadBtn" onclick="downloadGeneratedPDF()">
+                    下載 PDF
+                </button>
             </div>
         </div>
     </div>
