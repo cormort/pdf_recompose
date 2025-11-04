@@ -824,63 +824,137 @@ window.onload = function() {
             let tocPages = []; // 追蹤所有目錄頁
 
             if (addToc) {
-                progress.textContent = '正在建立目錄頁...';
-                let tocPage = newPdf.addPage([842, 595]); // 橫向A4
-                tocPages.push(tocPage);
+    progress.textContent = '正在建立目錄頁...';
+    let tocPage = newPdf.addPage([842, 595]); // 橫向A4
+    tocPages.push(tocPage);
+    
+    tocPage.drawText('目錄', { x: 50, y: 595 - 50, size: 18, font: customFont, color: rgb(0,0,0) });
+    let yPosition = 595 - 90;
+    let pageCounterForToc = 0;
+
+    // === 新增：建立頁面索引陣列 (用於超連結) ===
+    const contentPageIndices = [];
+    
+    for (const item of selectedPages) {
+        if (!item) continue;
+        
+        // --- 優化：TOC 頁面溢出處理 ---
+        if (yPosition < 50) {
+            tocPage = newPdf.addPage([842, 595]);
+            tocPages.push(tocPage);
+            yPosition = 595 - 90;
+            tocPage.drawText('目錄 (續)', { x: 50, y: 595 - 50, size: 18, font: customFont, color: rgb(0,0,0) });
+        }
+
+        if (item.type === 'divider') {
+            yPosition -= 10;
+            tocPage.drawText(item.firstLine || 'New Section', { x: 50, y: yPosition, size: 14, font: customFont, color: rgb(0,0,0) });
+            yPosition -= 25;
+        } else {
+            pageCounterForToc++;
+            const title = item.firstLine || `Page ${item.pageNum || '?'}`;
+            const pageNumStr = `${pageCounterForToc + pageOffset}`;
+            
+            const leftMargin = 70;
+            const rightMargin = 50;
+            const fontSize = 12;
+            const pageContentWidth = tocPage.getWidth() - leftMargin - rightMargin;
+            
+            let pageNumWidth = 0;
+            let titleWidth = 0;
+            let dotWidth = 0;
+            
+            try { pageNumWidth = customFont.widthOfTextAtSize(pageNumStr, fontSize); } catch (e) { console.error("Err getting pageNum width:", e); }
+            
+            let truncatedTitle = title;
+            try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize); } catch (e) { console.error("Err getting title width:", e); }
+            
+            const minDotSpace = 20;
+            while (titleWidth > 0 && pageContentWidth > 0 && (titleWidth + pageNumWidth + minDotSpace > pageContentWidth) && truncatedTitle.length > 5) {
+                truncatedTitle = truncatedTitle.slice(0, -2) + '…';
+                try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize); } catch (e) { titleWidth = 0; }
+            }
+            
+            // === 繪製標題文字 ===
+            tocPage.drawText(truncatedTitle, { 
+                x: leftMargin, 
+                y: yPosition, 
+                size: fontSize, 
+                font: customFont, 
+                color: rgb(0, 0.2, 0.8) // 改為藍色，表示可點擊
+            });
+            
+            // === 新增：建立超連結到對應頁面 ===
+            try {
+                // 目標頁面索引 = 目錄頁數 + 內容頁索引
+                const targetPageIndex = tocPages.length + (pageCounterForToc - 1);
+                const targetPage = newPdf.getPages()[targetPageIndex];
                 
-                tocPage.drawText('目錄', { x: 50, y: 595 - 50, size: 18, font: customFont, color: rgb(0,0,0) });
-                let yPosition = 595 - 90;
-                let pageCounterForToc = 0;
-
-                for (const item of selectedPages) {
-                     if (!item) continue;
+                if (targetPage) {
+                    // 建立點擊區域（涵蓋整個標題和頁碼）
+                    const linkHeight = fontSize + 4;
+                    const linkWidth = pageContentWidth;
                     
-                    // --- 優化：TOC 頁面溢出處理 ---
-                    if (yPosition < 50) {
-                        // 當Y座標太低時，新增一頁目錄
-                        tocPage = newPdf.addPage([842, 595]);
-                        tocPages.push(tocPage);
-                        yPosition = 595 - 90; // 重設 Y 座標
-                        // 繪製 "目錄 (續)"
-                        tocPage.drawText('目錄 (續)', { x: 50, y: 595 - 50, size: 18, font: customFont, color: rgb(0,0,0) });
-                    }
-
-                    if (item.type === 'divider') {
-                        yPosition -= 10;
-                        tocPage.drawText(item.firstLine || 'New Section', { x: 50, y: yPosition, size: 14, font: customFont, color: rgb(0,0,0) });
-                        yPosition -= 25;
-                    } else {
-                        pageCounterForToc++;
-                         const title = item.firstLine || `Page ${item.pageNum || '?'}`;
-                         const pageNumStr = `${pageCounterForToc + pageOffset}`; 
-                        const leftMargin = 70; const rightMargin = 50; const fontSize = 12;
-                        const pageContentWidth = tocPage.getWidth() - leftMargin - rightMargin;
-                        let pageNumWidth = 0; let titleWidth = 0; let dotWidth = 0;
-                        try { pageNumWidth = customFont.widthOfTextAtSize(pageNumStr, fontSize); } catch (e) { console.error("Err getting pageNum width:", e); }
-                        let truncatedTitle = title;
-                        try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize); } catch (e) { console.error("Err getting title width:", e); }
-                        const minDotSpace = 20;
-                        while (titleWidth > 0 && pageContentWidth > 0 && (titleWidth + pageNumWidth + minDotSpace > pageContentWidth) && truncatedTitle.length > 5) {
-                            truncatedTitle = truncatedTitle.slice(0, -2) + '…';
-                            try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize); } catch (e) { titleWidth = 0; }
-                        }
-                        tocPage.drawText(truncatedTitle, { x: leftMargin, y: yPosition, size: fontSize, font: customFont, color: rgb(0,0,0) });
-                        tocPage.drawText(pageNumStr, { x: tocPage.getWidth() - rightMargin - pageNumWidth, y: yPosition, size: fontSize, font: customFont, color: rgb(0,0,0) });
-                        try { dotWidth = customFont.widthOfTextAtSize('.', fontSize); } catch (e) { console.error("Err getting dot width:", e); }
-                         if (dotWidth > 0) {
-                             const dotStartX = leftMargin + titleWidth + 5;
-                             const dotEndX = tocPage.getWidth() - rightMargin - pageNumWidth - 5;
-                             const availableDotSpace = dotEndX - dotStartX;
-                              if (availableDotSpace > dotWidth) {
-                                 const numDots = Math.floor(availableDotSpace / dotWidth);
-                                 const dotString = '.'.repeat(numDots);
-                                 tocPage.drawText(dotString, { x: dotStartX, y: yPosition, size: fontSize, font: customFont, color: rgb(0,0,0), opacity: 0.5 });
-                              }
-                         }
-                        yPosition -= 20;
-                    }
+                    tocPage.node.set(
+                        PDFLib.PDFName.of('Annots'),
+                        tocPage.node.context.obj([
+                            ...(tocPage.node.get(PDFLib.PDFName.of('Annots'))?.asArray() || []),
+                            tocPage.doc.context.register(
+                                tocPage.doc.context.obj({
+                                    Type: 'Annot',
+                                    Subtype: 'Link',
+                                    Rect: [leftMargin - 5, yPosition - 2, tocPage.getWidth() - rightMargin + 5, yPosition + linkHeight],
+                                    Border: [0, 0, 0], // 無邊框
+                                    C: [0, 0, 1], // 藍色（備用）
+                                    Dest: [
+                                        targetPage.ref,
+                                        'XYZ',
+                                        null,
+                                        null,
+                                        0
+                                    ]
+                                })
+                            )
+                        ])
+                    );
+                }
+            } catch (linkError) {
+                console.error(`無法建立超連結 (頁 ${pageCounterForToc}):`, linkError);
+            }
+            
+            // === 繪製頁碼 ===
+            tocPage.drawText(pageNumStr, { 
+                x: tocPage.getWidth() - rightMargin - pageNumWidth, 
+                y: yPosition, 
+                size: fontSize, 
+                font: customFont, 
+                color: rgb(0, 0, 0) 
+            });
+            
+            // === 繪製點點 ===
+            try { dotWidth = customFont.widthOfTextAtSize('.', fontSize); } catch (e) { console.error("Err getting dot width:", e); }
+            if (dotWidth > 0) {
+                const dotStartX = leftMargin + titleWidth + 5;
+                const dotEndX = tocPage.getWidth() - rightMargin - pageNumWidth - 5;
+                const availableDotSpace = dotEndX - dotStartX;
+                if (availableDotSpace > dotWidth) {
+                    const numDots = Math.floor(availableDotSpace / dotWidth);
+                    const dotString = '.'.repeat(numDots);
+                    tocPage.drawText(dotString, { 
+                        x: dotStartX, 
+                        y: yPosition, 
+                        size: fontSize, 
+                        font: customFont, 
+                        color: rgb(0, 0, 0), 
+                        opacity: 0.5 
+                    });
                 }
             }
+            
+            yPosition -= 20;
+        }
+    }
+}
             
             // 目錄頁也算在總頁數偏移中
             pageOffset = tocPages.length;
