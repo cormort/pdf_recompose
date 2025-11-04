@@ -763,292 +763,332 @@ window.onload = function() {
     // ==========================================================
     // === generatePDF (已大幅修改)
     // ==========================================================
-    async function generatePDF() {
-         if (typeof PDFLib === 'undefined' || typeof PDFLib.PDFDocument === 'undefined') {
-            console.error("PDFLib not available in generatePDF");
-            showNotification("錯誤：無法生成 PDF，編輯函式庫載入失敗。", 'error');
-            return;
-         }
+    // ==========================================================
+// === generatePDF - 完整版本（含目錄超連結）
+// ==========================================================
+async function generatePDF() {
+    if (typeof PDFLib === 'undefined' || typeof PDFLib.PDFDocument === 'undefined') {
+        console.error("PDFLib not available in generatePDF");
+        showNotification("錯誤：無法生成 PDF，編輯函式庫載入失敗。", 'error');
+        return;
+    }
 
-        const { PDFDocument, rgb, StandardFonts } = PDFLib;
+    const { PDFDocument, rgb, StandardFonts, PDFName, PDFArray } = PDFLib;
 
-        const pageItems = selectedPages.filter(p => p && p.type !== 'divider');
-        if (pageItems.length === 0) {
-            progress.textContent = '⚠️ 請至少選擇一個頁面';
-            progress.classList.add('active', 'error');
-            setTimeout(() => progress.classList.remove('active', 'error'), 3000);
-            return;
-        }
-        try {
-            progress.textContent = '⏳ 正在準備生成 PDF...';
-            progress.classList.remove('success', 'error');
-            progress.classList.add('active');
-            
-            const newPdf = await PDFDocument.create();
-            let customFont;
-            
-            // --- 優化：建立 PDF-Lib 文件快取 ---
-            const pdfLibDocCache = new Map();
+    const pageItems = selectedPages.filter(p => p && p.type !== 'divider');
+    if (pageItems.length === 0) {
+        progress.textContent = '⚠️ 請至少選擇一個頁面';
+        progress.classList.add('active', 'error');
+        setTimeout(() => progress.classList.remove('active', 'error'), 3000);
+        return;
+    }
 
-            try {
-                progress.textContent = '正在載入中文字型...';
-                const fontUrl = './fonts/NotoSansTC-Regular.ttf'; // 載入本地字型
-                const fontBytes = await fetch(fontUrl).then(res => {
-                    if (!res.ok) throw new Error(`字型檔案 (${fontUrl}) 載入失敗！ status: ${res.status}`);
-                    return res.arrayBuffer();
-                });
-                
-                if (typeof fontkit === 'undefined') {
-                     throw new Error("fontkit 函式庫載入失敗");
-                }
-                newPdf.registerFontkit(fontkit); 
-                customFont = await newPdf.embedFont(fontBytes);
-                progress.textContent = '中文字型載入成功!';
-                await new Promise(resolve => setTimeout(resolve, 500));
-            } catch (fontError) {
-                console.error("中文字型載入失敗:", fontError);
-                showNotification(`警告：無法載入本地字型。目錄將使用英文字型。`, 'error');
-                 try {
-                     customFont = await newPdf.embedFont(StandardFonts.Helvetica);
-                 } catch (embedError) {
-                     console.error("Failed to embed fallback font:", embedError);
-                     showNotification("致命錯誤：無法嵌入預設字型。", 'error');
-                     progress.textContent = '❌ 生成失敗：無法嵌入字型';
-                     progress.classList.add('active', 'error');
-                     return;
-                 }
-            }
-            
-            const addToc = addTocCheckbox.checked;
-            let pageOffset = addToc ? 1 : 0; 
-            let tocPages = []; // 追蹤所有目錄頁
-
-            if (addToc) {
-    progress.textContent = '正在建立目錄頁...';
-    let tocPage = newPdf.addPage([842, 595]); // 橫向A4
-    tocPages.push(tocPage);
-    
-    tocPage.drawText('目錄', { x: 50, y: 595 - 50, size: 18, font: customFont, color: rgb(0,0,0) });
-    let yPosition = 595 - 90;
-    let pageCounterForToc = 0;
-
-    for (const item of selectedPages) {
-        if (!item) continue;
+    try {
+        progress.textContent = '⏳ 正在準備生成 PDF...';
+        progress.classList.remove('success', 'error');
+        progress.classList.add('active');
         
-        // --- TOC 頁面溢出處理 ---
-        if (yPosition < 50) {
-            tocPage = newPdf.addPage([842, 595]);
-            tocPages.push(tocPage);
-            yPosition = 595 - 90;
-            tocPage.drawText('目錄 (續)', { x: 50, y: 595 - 50, size: 18, font: customFont, color: rgb(0,0,0) });
-        }
+        const newPdf = await PDFDocument.create();
+        let customFont;
+        
+        // --- 優化：建立 PDF-Lib 文件快取 ---
+        const pdfLibDocCache = new Map();
 
-        if (item.type === 'divider') {
-            yPosition -= 10;
-            tocPage.drawText(item.firstLine || 'New Section', { x: 50, y: yPosition, size: 14, font: customFont, color: rgb(0,0,0) });
-            yPosition -= 25;
-        } else {
-            pageCounterForToc++;
-            const title = item.firstLine || `Page ${item.pageNum || '?'}`;
-            const pageNumStr = `${pageCounterForToc + pageOffset}`;
+        try {
+            progress.textContent = '正在載入中文字型...';
+            const fontUrl = './fonts/NotoSansTC-Regular.ttf';
+            const fontBytes = await fetch(fontUrl).then(res => {
+                if (!res.ok) throw new Error(`字型檔案 (${fontUrl}) 載入失敗！ status: ${res.status}`);
+                return res.arrayBuffer();
+            });
             
-            const leftMargin = 70;
-            const rightMargin = 50;
-            const fontSize = 12;
-            const pageContentWidth = tocPage.getWidth() - leftMargin - rightMargin;
-            
-            let pageNumWidth = 0;
-            let titleWidth = 0;
-            let dotWidth = 0;
-            
-            try { pageNumWidth = customFont.widthOfTextAtSize(pageNumStr, fontSize); } catch (e) { console.error("Err getting pageNum width:", e); }
-            
-            let truncatedTitle = title;
-            try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize); } catch (e) { console.error("Err getting title width:", e); }
-            
-            const minDotSpace = 20;
-            while (titleWidth > 0 && pageContentWidth > 0 && (titleWidth + pageNumWidth + minDotSpace > pageContentWidth) && truncatedTitle.length > 5) {
-                truncatedTitle = truncatedTitle.slice(0, -2) + '…';
-                try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize); } catch (e) { titleWidth = 0; }
+            if (typeof fontkit === 'undefined') {
+                throw new Error("fontkit 函式庫載入失敗");
             }
+            newPdf.registerFontkit(fontkit); 
+            customFont = await newPdf.embedFont(fontBytes);
+            progress.textContent = '中文字型載入成功!';
+            await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (fontError) {
+            console.error("中文字型載入失敗:", fontError);
+            showNotification(`警告：無法載入本地字型。目錄將使用英文字型。`, 'error');
+            try {
+                customFont = await newPdf.embedFont(StandardFonts.Helvetica);
+            } catch (embedError) {
+                console.error("Failed to embed fallback font:", embedError);
+                showNotification("致命錯誤：無法嵌入預設字型。", 'error');
+                progress.textContent = '❌ 生成失敗：無法嵌入字型';
+                progress.classList.add('active', 'error');
+                return;
+            }
+        }
+        
+        const addToc = addTocCheckbox.checked;
+        let tocPages = []; // 追蹤所有目錄頁
+        let tocLinkData = []; // 儲存目錄項目的位置資訊（用於後續建立超連結）
+
+        if (addToc) {
+            progress.textContent = '正在建立目錄頁...';
+            let tocPage = newPdf.addPage([842, 595]); // 橫向A4
+            tocPages.push(tocPage);
             
-            // === 繪製標題文字（藍色表示可點擊）===
-            tocPage.drawText(truncatedTitle, { 
-                x: leftMargin, 
-                y: yPosition, 
-                size: fontSize, 
-                font: customFont, 
-                color: rgb(0, 0.2, 0.8) // 藍色
-            });
-            
-            // === 繪製頁碼 ===
-            tocPage.drawText(pageNumStr, { 
-                x: tocPage.getWidth() - rightMargin - pageNumWidth, 
-                y: yPosition, 
-                size: fontSize, 
-                font: customFont, 
-                color: rgb(0, 0, 0) 
-            });
-            
-            // === 繪製點點 ===
-            try { dotWidth = customFont.widthOfTextAtSize('.', fontSize); } catch (e) { console.error("Err getting dot width:", e); }
-            if (dotWidth > 0) {
-                const dotStartX = leftMargin + titleWidth + 5;
-                const dotEndX = tocPage.getWidth() - rightMargin - pageNumWidth - 5;
-                const availableDotSpace = dotEndX - dotStartX;
-                if (availableDotSpace > dotWidth) {
-                    const numDots = Math.floor(availableDotSpace / dotWidth);
-                    const dotString = '.'.repeat(numDots);
-                    tocPage.drawText(dotString, { 
-                        x: dotStartX, 
+            tocPage.drawText('目錄', { x: 50, y: 595 - 50, size: 18, font: customFont, color: rgb(0,0,0) });
+            let yPosition = 595 - 90;
+            let pageCounterForToc = 0;
+
+            for (const item of selectedPages) {
+                if (!item) continue;
+                
+                // --- TOC 頁面溢出處理 ---
+                if (yPosition < 50) {
+                    tocPage = newPdf.addPage([842, 595]);
+                    tocPages.push(tocPage);
+                    yPosition = 595 - 90;
+                    tocPage.drawText('目錄 (續)', { x: 50, y: 595 - 50, size: 18, font: customFont, color: rgb(0,0,0) });
+                }
+
+                if (item.type === 'divider') {
+                    yPosition -= 10;
+                    tocPage.drawText(item.firstLine || 'New Section', { 
+                        x: 50, 
+                        y: yPosition, 
+                        size: 14, 
+                        font: customFont, 
+                        color: rgb(0,0,0) 
+                    });
+                    yPosition -= 25;
+                } else {
+                    pageCounterForToc++;
+                    const title = item.firstLine || `Page ${item.pageNum || '?'}`;
+                    const pageNumStr = `${pageCounterForToc + tocPages.length}`;
+                    
+                    const leftMargin = 70;
+                    const rightMargin = 50;
+                    const fontSize = 12;
+                    const pageContentWidth = tocPage.getWidth() - leftMargin - rightMargin;
+                    
+                    let pageNumWidth = 0;
+                    let titleWidth = 0;
+                    let dotWidth = 0;
+                    
+                    try { pageNumWidth = customFont.widthOfTextAtSize(pageNumStr, fontSize); } catch (e) { console.error("Err getting pageNum width:", e); }
+                    
+                    let truncatedTitle = title;
+                    try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize); } catch (e) { console.error("Err getting title width:", e); }
+                    
+                    const minDotSpace = 20;
+                    while (titleWidth > 0 && pageContentWidth > 0 && (titleWidth + pageNumWidth + minDotSpace > pageContentWidth) && truncatedTitle.length > 5) {
+                        truncatedTitle = truncatedTitle.slice(0, -2) + '…';
+                        try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize); } catch (e) { titleWidth = 0; }
+                    }
+                    
+                    // === 繪製標題文字（藍色表示可點擊）===
+                    tocPage.drawText(truncatedTitle, { 
+                        x: leftMargin, 
                         y: yPosition, 
                         size: fontSize, 
                         font: customFont, 
-                        color: rgb(0, 0, 0), 
-                        opacity: 0.5 
+                        color: rgb(0, 0.2, 0.8) // 藍色
                     });
-                }
-            }
-            
-            // === 新增：建立超連結（使用正確的 API）===
-            try {
-                // 目標頁面索引（目錄頁數 + 內容頁索引）
-                const targetPageIndex = tocPages.length + (pageCounterForToc - 1);
-                
-                // 取得所有頁面
-                const allPages = newPdf.getPages();
-                
-                if (targetPageIndex < allPages.length) {
-                    const targetPage = allPages[targetPageIndex];
                     
-                    // 定義點擊區域（涵蓋整行）
-                    const linkHeight = fontSize + 4;
-                    const linkRect = {
-                        x: leftMargin - 5,
-                        y: yPosition - 2,
-                        width: pageContentWidth + 10,
-                        height: linkHeight
-                    };
+                    // === 繪製頁碼 ===
+                    tocPage.drawText(pageNumStr, { 
+                        x: tocPage.getWidth() - rightMargin - pageNumWidth, 
+                        y: yPosition, 
+                        size: fontSize, 
+                        font: customFont, 
+                        color: rgb(0, 0, 0) 
+                    });
                     
-                    // 使用 pdf-lib 的 API 建立內部連結
-                    const linkAnnotation = tocPage.doc.context.obj({
-                        Type: 'Annot',
-                        Subtype: 'Link',
-                        Rect: [
-                            linkRect.x, 
-                            linkRect.y, 
-                            linkRect.x + linkRect.width, 
-                            linkRect.y + linkRect.height
-                        ],
-                        Border: [0, 0, 0],
-                        C: [0, 0, 1],
-                        A: {
-                            S: 'GoTo',
-                            D: [targetPage.ref, 'Fit']
+                    // === 繪製點點 ===
+                    try { dotWidth = customFont.widthOfTextAtSize('.', fontSize); } catch (e) { console.error("Err getting dot width:", e); }
+                    if (dotWidth > 0) {
+                        const dotStartX = leftMargin + titleWidth + 5;
+                        const dotEndX = tocPage.getWidth() - rightMargin - pageNumWidth - 5;
+                        const availableDotSpace = dotEndX - dotStartX;
+                        if (availableDotSpace > dotWidth) {
+                            const numDots = Math.floor(availableDotSpace / dotWidth);
+                            const dotString = '.'.repeat(numDots);
+                            tocPage.drawText(dotString, { 
+                                x: dotStartX, 
+                                y: yPosition, 
+                                size: fontSize, 
+                                font: customFont, 
+                                color: rgb(0, 0, 0), 
+                                opacity: 0.5 
+                            });
+                        }
+                    }
+                    
+                    // === 儲存連結資訊（稍後建立）===
+                    tocLinkData.push({
+                        tocPage: tocPage,
+                        targetContentPageIndex: pageCounterForToc - 1, // 目標內容頁索引（相對於內容頁起始）
+                        linkRect: {
+                            x: leftMargin - 5,
+                            y: yPosition - 2,
+                            width: pageContentWidth + 10,
+                            height: fontSize + 4
                         }
                     });
                     
-                    // 將 annotation 加到頁面
-                    const annots = tocPage.node.lookup(PDFLib.PDFName.of('Annots'), PDFLib.PDFArray) || tocPage.doc.context.obj([]);
-                    annots.push(tocPage.doc.context.register(linkAnnotation));
-                    tocPage.node.set(PDFLib.PDFName.of('Annots'), annots);
-                    
-                } else {
-                    console.warn(`目標頁面索引 ${targetPageIndex} 超出範圍`);
+                    yPosition -= 20;
                 }
-            } catch (linkError) {
-                console.error(`無法建立超連結 (頁 ${pageCounterForToc}):`, linkError);
+            }
+        }
+        
+        // === 開始合併內容頁 ===
+        let pageCounterForContent = 0;
+        const pageOffset = tocPages.length; // 目錄頁數作為頁碼偏移
+
+        for (const item of selectedPages) {
+            if (!item || item.type === 'divider') continue;
+            pageCounterForContent++;
+            progress.textContent = `正在合併頁面 (${pageCounterForContent}/${pageItems.length})...`;
+            
+            if (item.fileIndex === undefined || item.fileIndex === null || !pdfFiles[item.fileIndex] || !pdfFiles[item.fileIndex].file || !item.pageNum) {
+                console.error("Missing data for page item:", item); 
+                continue;
             }
             
-            yPosition -= 20;
+            const sourceFile = pdfFiles[item.fileIndex];
+            
+            try {
+                // --- 優化：使用快取載入 PDF ---
+                let sourcePdf;
+                if (pdfLibDocCache.has(item.fileIndex)) {
+                    sourcePdf = pdfLibDocCache.get(item.fileIndex);
+                } else {
+                    const freshArrayBuffer = await sourceFile.file.arrayBuffer();
+                    sourcePdf = await PDFDocument.load(freshArrayBuffer, { ignoreEncryption: true, updateMetadata: false });
+                    pdfLibDocCache.set(item.fileIndex, sourcePdf);
+                }
+
+                if (item.pageNum < 1 || item.pageNum > sourcePdf.getPageCount()) {
+                    console.error(`Invalid page ${item.pageNum} for ${sourceFile.name}`); 
+                    continue;
+                }
+                
+                const [copiedPage] = await newPdf.copyPages(sourcePdf, [item.pageNum - 1]);
+
+                // --- 套用旋轉 ---
+                if (item.rotation && item.rotation !== 0) {
+                    copiedPage.rotate(item.rotation);
+                }
+                
+                newPdf.addPage(copiedPage);
+                
+                // 加上新的頁碼
+                const newPageNumber = `${pageCounterForContent + pageOffset}`;
+                const { width, height } = copiedPage.getSize();
+                
+                if (width > 0 && height > 0) {
+                    copiedPage.drawText(newPageNumber, { 
+                        x: width - 40, 
+                        y: 30, 
+                        size: 10, 
+                        font: customFont, 
+                        color: rgb(0, 0, 0) 
+                    });
+                } else { 
+                    console.warn(`Invalid dimensions page ${pageCounterForContent}`); 
+                }
+            } catch(loadError) {
+                console.error(`Error loading/copying page ${item.pageNum} from ${sourceFile.name}:`, loadError);
+                showNotification(`錯誤：無法處理檔案 "${sourceFile.name}" 第 ${item.pageNum} 頁。`, 'error');
+            }
         }
+
+        // === 在所有頁面建立完成後，建立目錄超連結 ===
+        if (addToc && tocLinkData.length > 0) {
+            progress.textContent = '正在建立目錄超連結...';
+            
+            const allPages = newPdf.getPages();
+            
+            for (let i = 0; i < tocLinkData.length; i++) {
+                const linkInfo = tocLinkData[i];
+                const targetPageIndex = tocPages.length + linkInfo.targetContentPageIndex;
+                
+                if (targetPageIndex >= allPages.length) {
+                    console.warn(`目標頁面索引 ${targetPageIndex} 超出範圍`);
+                    continue;
+                }
+                
+                const targetPage = allPages[targetPageIndex];
+                
+                try {
+                    // 建立 Link Annotation
+                    const linkAnnot = linkInfo.tocPage.doc.context.obj({
+                        Type: 'Annot',
+                        Subtype: 'Link',
+                        Rect: [
+                            linkInfo.linkRect.x,
+                            linkInfo.linkRect.y,
+                            linkInfo.linkRect.x + linkInfo.linkRect.width,
+                            linkInfo.linkRect.y + linkInfo.linkRect.height
+                        ],
+                        Border: [0, 0, 0], // 無邊框
+                        C: [0, 0, 1], // 藍色（某些 PDF 閱讀器會顯示）
+                        A: {
+                            S: 'GoTo',
+                            D: [targetPage.ref, 'Fit'] // 跳轉到目標頁面並自動縮放
+                        }
+                    });
+                    
+                    // 將 annotation 註冊並加到目錄頁
+                    const registeredAnnot = linkInfo.tocPage.doc.context.register(linkAnnot);
+                    
+                    // 取得或建立 Annots 陣列
+                    let annots = linkInfo.tocPage.node.lookup(PDFName.of('Annots'));
+                    
+                    if (!annots) {
+                        // 如果頁面沒有 Annots，建立新陣列
+                        annots = linkInfo.tocPage.doc.context.obj([]);
+                        linkInfo.tocPage.node.set(PDFName.of('Annots'), annots);
+                    }
+                    
+                    // 將連結加入陣列
+                    if (annots instanceof PDFArray || Array.isArray(annots.array)) {
+                        annots.push(registeredAnnot);
+                    } else {
+                        console.warn('Annots is not an array, cannot add link');
+                    }
+                    
+                } catch (linkError) {
+                    console.error(`無法建立超連結 (項目 ${i + 1}):`, linkError);
+                }
+            }
+        }
+
+        progress.textContent = '正在儲存 PDF...';
+        
+        // 使用 pdf-lib 生成 PDF 的 bytes
+        let pdfBytes = await newPdf.save();
+
+        // --- 不再直接下載，而是開啟預覽 ---
+        finalPdfBytes = pdfBytes;
+        
+        const blob = new Blob([finalPdfBytes], { type: 'application/pdf' });
+        currentPreviewUrl = URL.createObjectURL(blob);
+
+        const iframe = document.getElementById('previewFrame');
+        const modal = document.getElementById('previewModal');
+        
+        iframe.src = currentPreviewUrl;
+        modal.style.display = 'flex';
+        
+        progress.textContent = '✅ 預覽生成成功！';
+        progress.classList.add('success');
+        setTimeout(() => progress.classList.remove('active', 'success'), 5000);
+
+    } catch (error) {
+        console.error('生成 PDF 時發生錯誤：', error);
+        progress.textContent = '❌ 生成失敗：' + error.message;
+        showNotification('❌ 生成失敗：' + error.message, 'error');
+        progress.classList.add('active', 'error');
+        setTimeout(() => progress.classList.remove('active', 'error'), 8000);
     }
 }
-            
-            // 目錄頁也算在總頁數偏移中
-            pageOffset = tocPages.length;
-
-            let pageCounterForContent = 0;
-            for (const item of selectedPages) {
-                 if (!item || item.type === 'divider') continue;
-                 pageCounterForContent++;
-                progress.textContent = `正在合併頁面 (${pageCounterForContent}/${pageItems.length})...`;
-                 if (item.fileIndex === undefined || item.fileIndex === null || !pdfFiles[item.fileIndex] || !pdfFiles[item.fileIndex].file || !item.pageNum) {
-                     console.error("Missing data for page item:", item); continue;
-                 }
-                 const sourceFile = pdfFiles[item.fileIndex];
-                
-                 try {
-                    // --- 優化：使用快取載入 PDF ---
-                    let sourcePdf;
-                    if (pdfLibDocCache.has(item.fileIndex)) {
-                        // 從快取讀取
-                        sourcePdf = pdfLibDocCache.get(item.fileIndex);
-                    } else {
-                        // 第一次載入，並存入快取
-                        const freshArrayBuffer = await sourceFile.file.arrayBuffer();
-                        sourcePdf = await PDFDocument.load(freshArrayBuffer, { ignoreEncryption: true, updateMetadata: false });
-                        pdfLibDocCache.set(item.fileIndex, sourcePdf);
-                    }
-                    // --- 快取邏輯結束 ---
-
-                     if (item.pageNum < 1 || item.pageNum > sourcePdf.getPageCount()) {
-                         console.error(`Invalid page ${item.pageNum} for ${sourceFile.name}`); continue;
-                     }
-                    const [copiedPage] = await newPdf.copyPages(sourcePdf, [item.pageNum - 1]);
-
-                    // --- 新增：套用旋轉 ---
-                    if (item.rotation && item.rotation !== 0) {
-                        copiedPage.rotate(item.rotation);
-                    }
-                    
-                    newPdf.addPage(copiedPage);
-                    
-                    // 加上新的頁碼
-                    const newPageNumber = `${pageCounterForContent + pageOffset}`;
-                    // 取得 (可能旋轉後的) 頁面尺寸
-                    const { width, height } = copiedPage.getSize();
-                    
-                     if (width > 0 && height > 0) {
-                         // 將頁碼固定畫在 (可能旋轉後的) 右下角
-                        copiedPage.drawText(newPageNumber, { x: width - 40, y: 30, size: 10, font: customFont, color: rgb(0, 0, 0) });
-                     } else { console.warn(`Invalid dimensions page ${pageCounterForContent}`); }
-                 } catch(loadError) {
-                     console.error(`Error loading/copying page ${item.pageNum} from ${sourceFile.name}:`, loadError);
-                     showNotification(`錯誤：無法處理檔案 "${sourceFile.name}" 第 ${item.pageNum} 頁。`, 'error');
-                 }
-            }
-
-            progress.textContent = '正在儲存 PDF...';
-            
-            // 使用 pdf-lib 生成 PDF 的 bytes
-            let pdfBytes = await newPdf.save();
-
-            // --- 修改：不再直接下載，而是開啟預覽 ---
-            
-            finalPdfBytes = pdfBytes; // 儲存到全域變數
-            
-            const blob = new Blob([finalPdfBytes], { type: 'application/pdf' });
-            currentPreviewUrl = URL.createObjectURL(blob); // 儲存預覽 URL
-
-            const iframe = document.getElementById('previewFrame');
-            const modal = document.getElementById('previewModal');
-            
-            iframe.src = currentPreviewUrl;
-            modal.style.display = 'flex';
-            
-            progress.textContent = '✅ 預覽生成成功！';
-            progress.classList.add('success');
-            setTimeout(() => progress.classList.remove('active', 'success'), 5000);
-
-        } catch (error) {
-             console.error('生成 PDF 時發生錯誤：', error);
-             progress.textContent = '❌ 生成失敗：' + error.message;
-             showNotification('❌ 生成失敗：' + error.message, 'error');
-             progress.classList.add('active', 'error');
-              setTimeout(() => progress.classList.remove('active', 'error'), 8000);
-        }
-    }
 
     // --- Initial setup calls within onload ---
     setThumbnailSize('medium');
