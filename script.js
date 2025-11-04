@@ -940,7 +940,7 @@ window.onload = function() {
                             y: yPosition, 
                             size: TOC_CONFIG.ITEM_TITLE_SIZE,
                             font: customFont, 
-                            color: rgb(0, 0.2, 0.8) // 藍色表示可點擊
+                            color: rgb(0, 0, 0) // 目錄的顏色
                         });
                         
                         // === 繪製頁碼（使用使用者設定）===
