@@ -832,13 +832,10 @@ window.onload = function() {
     let yPosition = 595 - 90;
     let pageCounterForToc = 0;
 
-    // === 新增：建立頁面索引陣列 (用於超連結) ===
-    const contentPageIndices = [];
-    
     for (const item of selectedPages) {
         if (!item) continue;
         
-        // --- 優化：TOC 頁面溢出處理 ---
+        // --- TOC 頁面溢出處理 ---
         if (yPosition < 50) {
             tocPage = newPdf.addPage([842, 595]);
             tocPages.push(tocPage);
@@ -875,52 +872,14 @@ window.onload = function() {
                 try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, fontSize); } catch (e) { titleWidth = 0; }
             }
             
-            // === 繪製標題文字 ===
+            // === 繪製標題文字（藍色表示可點擊）===
             tocPage.drawText(truncatedTitle, { 
                 x: leftMargin, 
                 y: yPosition, 
                 size: fontSize, 
                 font: customFont, 
-                color: rgb(0, 0.2, 0.8) // 改為藍色，表示可點擊
+                color: rgb(0, 0.2, 0.8) // 藍色
             });
-            
-            // === 新增：建立超連結到對應頁面 ===
-            try {
-                // 目標頁面索引 = 目錄頁數 + 內容頁索引
-                const targetPageIndex = tocPages.length + (pageCounterForToc - 1);
-                const targetPage = newPdf.getPages()[targetPageIndex];
-                
-                if (targetPage) {
-                    // 建立點擊區域（涵蓋整個標題和頁碼）
-                    const linkHeight = fontSize + 4;
-                    const linkWidth = pageContentWidth;
-                    
-                    tocPage.node.set(
-                        PDFLib.PDFName.of('Annots'),
-                        tocPage.node.context.obj([
-                            ...(tocPage.node.get(PDFLib.PDFName.of('Annots'))?.asArray() || []),
-                            tocPage.doc.context.register(
-                                tocPage.doc.context.obj({
-                                    Type: 'Annot',
-                                    Subtype: 'Link',
-                                    Rect: [leftMargin - 5, yPosition - 2, tocPage.getWidth() - rightMargin + 5, yPosition + linkHeight],
-                                    Border: [0, 0, 0], // 無邊框
-                                    C: [0, 0, 1], // 藍色（備用）
-                                    Dest: [
-                                        targetPage.ref,
-                                        'XYZ',
-                                        null,
-                                        null,
-                                        0
-                                    ]
-                                })
-                            )
-                        ])
-                    );
-                }
-            } catch (linkError) {
-                console.error(`無法建立超連結 (頁 ${pageCounterForToc}):`, linkError);
-            }
             
             // === 繪製頁碼 ===
             tocPage.drawText(pageNumStr, { 
@@ -949,6 +908,56 @@ window.onload = function() {
                         opacity: 0.5 
                     });
                 }
+            }
+            
+            // === 新增：建立超連結（使用正確的 API）===
+            try {
+                // 目標頁面索引（目錄頁數 + 內容頁索引）
+                const targetPageIndex = tocPages.length + (pageCounterForToc - 1);
+                
+                // 取得所有頁面
+                const allPages = newPdf.getPages();
+                
+                if (targetPageIndex < allPages.length) {
+                    const targetPage = allPages[targetPageIndex];
+                    
+                    // 定義點擊區域（涵蓋整行）
+                    const linkHeight = fontSize + 4;
+                    const linkRect = {
+                        x: leftMargin - 5,
+                        y: yPosition - 2,
+                        width: pageContentWidth + 10,
+                        height: linkHeight
+                    };
+                    
+                    // 使用 pdf-lib 的 API 建立內部連結
+                    const linkAnnotation = tocPage.doc.context.obj({
+                        Type: 'Annot',
+                        Subtype: 'Link',
+                        Rect: [
+                            linkRect.x, 
+                            linkRect.y, 
+                            linkRect.x + linkRect.width, 
+                            linkRect.y + linkRect.height
+                        ],
+                        Border: [0, 0, 0],
+                        C: [0, 0, 1],
+                        A: {
+                            S: 'GoTo',
+                            D: [targetPage.ref, 'Fit']
+                        }
+                    });
+                    
+                    // 將 annotation 加到頁面
+                    const annots = tocPage.node.lookup(PDFLib.PDFName.of('Annots'), PDFLib.PDFArray) || tocPage.doc.context.obj([]);
+                    annots.push(tocPage.doc.context.register(linkAnnotation));
+                    tocPage.node.set(PDFLib.PDFName.of('Annots'), annots);
+                    
+                } else {
+                    console.warn(`目標頁面索引 ${targetPageIndex} 超出範圍`);
+                }
+            } catch (linkError) {
+                console.error(`無法建立超連結 (頁 ${pageCounterForToc}):`, linkError);
             }
             
             yPosition -= 20;
