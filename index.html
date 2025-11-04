@@ -113,12 +113,91 @@
             <div>正在生成 PDF...</div>
         </div>
 
-        <div class="options-group">
+<!-- 目錄設定區塊 -->
+<div style="margin: 16px 0; padding: 16px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+    <!-- 目錄勾選框 -->
+    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 500;">
+        <input type="checkbox" id="addTocCheckbox" checked style="width: 18px; height: 18px; cursor: pointer;">
+        <span style="font-size: 16px;">📑 新增目錄頁</span>
+    </label>
+
+    <!-- 目錄字型設定面板 -->
+    <div id="tocSettingsPanel" style="margin-top: 12px; margin-left: 26px; padding: 16px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid #4CAF50; display: none;">
+        <div style="font-weight: bold; margin-bottom: 12px; color: #333; font-size: 14px;">
+            ⚙️ 目錄字型設定
+        </div>
+        
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;">
+            <!-- 主標題大小 -->
             <div>
-                <input type="checkbox" id="addTocCheckbox" checked>
-                <label for="addTocCheckbox">新增目錄頁 (會放在第一頁)</label>
+                <label style="display: block; font-size: 12px; color: #666; margin-bottom: 6px; font-weight: 500;">
+                    「目錄」標題大小
+                </label>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <input type="number" id="tocMainTitleSize" min="12" max="32" value="20" 
+                           style="width: 70px; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                    <span style="font-size: 12px; color: #999;">pt</span>
+                </div>
+            </div>
+            
+            <!-- 分隔線標題 -->
+            <div>
+                <label style="display: block; font-size: 12px; color: #666; margin-bottom: 6px; font-weight: 500;">
+                    分隔線標題大小
+                </label>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <input type="number" id="tocSectionSize" min="10" max="24" value="14" 
+                           style="width: 70px; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                    <span style="font-size: 12px; color: #999;">pt</span>
+                </div>
+            </div>
+            
+            <!-- 項目標題 -->
+            <div>
+                <label style="display: block; font-size: 12px; color: #666; margin-bottom: 6px; font-weight: 500;">
+                    項目標題大小
+                </label>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <input type="number" id="tocItemTitleSize" min="8" max="20" value="12" 
+                           style="width: 70px; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                    <span style="font-size: 12px; color: #999;">pt</span>
+                </div>
+            </div>
+            
+            <!-- 頁碼 -->
+            <div>
+                <label style="display: block; font-size: 12px; color: #666; margin-bottom: 6px; font-weight: 500;">
+                    頁碼大小
+                </label>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <input type="number" id="tocPageNumSize" min="8" max="20" value="12" 
+                           style="width: 70px; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                    <span style="font-size: 12px; color: #999;">pt</span>
+                </div>
+            </div>
+            
+            <!-- 行距 -->
+            <div style="grid-column: 1 / -1;">
+                <label style="display: block; font-size: 12px; color: #666; margin-bottom: 6px; font-weight: 500;">
+                    行距
+                </label>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <input type="number" id="tocLineHeight" min="15" max="40" value="20" 
+                           style="width: 70px; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                    <span style="font-size: 12px; color: #999;">pt</span>
+                </div>
             </div>
         </div>
+        
+        <!-- 重設按鈕 -->
+        <button onclick="resetTocSettings()" 
+                style="margin-top: 12px; padding: 6px 16px; font-size: 13px; background: white; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; transition: all 0.2s;"
+                onmouseover="this.style.background='#f0f0f0'" 
+                onmouseout="this.style.background='white'">
+            🔄 重設為預設值
+        </button>
+    </div>
+</div>
 
         <button class="btn btn-success" id="generateBtn" onclick="generatePDF()">
             生成新的 PDF
