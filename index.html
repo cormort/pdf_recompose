@@ -207,16 +207,17 @@
             <div class="panel-title">
                 <span>📑 原始 PDF 頁面</span>
                 <div class="panel-controls">
+                    <div class="toggle-group">
+                        <button id="listViewBtn" onclick="setViewMode('list')">清單</button>
+                        <button id="gridViewBtn" class="active" onclick="setViewMode('grid')">縮圖</button>                        
+                    </div>
                     <div class="toggle-group" id="size-toggle">
                         <button onclick="setThumbnailSize('small')">小</button>
                         <button onclick="setThumbnailSize('medium')">中</button>
                         <button onclick="setThumbnailSize('large')">大</button>
                         <button onclick="setThumbnailSize('xlarge')">超大</button>
                     </div>
-                    <div class="toggle-group">
-                        <button id="gridViewBtn" class="active" onclick="setViewMode('grid')">縮圖</button>
-                        <button id="listViewBtn" onclick="setViewMode('list')">清單</button>
-                    </div>
+                    
                     <button id="editSourceBtn" class="btn-panel-action btn-edit" onclick="toggleSourceEditMode()">🗑️ 刪除頁面</button>
                 </div>
             </div>
