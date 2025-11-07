@@ -1,5 +1,5 @@
 // ==========================================================
-// ===    *** 本地檔案 ***
+// ===   *** 本地檔案 ***
 // === 確保所有函式庫 (包含本地 pdf.min.js) 都載入後才執行
 // ==========================================================
 window.onload = function() {
@@ -635,20 +635,20 @@ window.onload = function() {
                  const toIndex = currentChildren.indexOf(draggedElement);
 
                  if (isNaN(fromIndex) || fromIndex < 0 || fromIndex >= selectedPages.length || toIndex < 0) {
-                     console.error("Invalid index during drop:", { fromIndex, toIndex, selectedPagesLength: selectedPages.length });
-                     renderSelectedPages();
-                     return;
+                      console.error("Invalid index during drop:", { fromIndex, toIndex, selectedPagesLength: selectedPages.length });
+                      renderSelectedPages();
+                      return;
                  }
 
                  if (fromIndex !== toIndex) {
-                    const [movedItem] = selectedPages.splice(fromIndex, 1);
-                    if (movedItem) {
-                         selectedPages.splice(toIndex, 0, movedItem);
-                     } else {
-                         console.error("Splice failed to return the moved item.");
-                         renderSelectedPages();
-                         return;
-                     }
+                     const [movedItem] = selectedPages.splice(fromIndex, 1);
+                     if (movedItem) {
+                          selectedPages.splice(toIndex, 0, movedItem);
+                       } else {
+                           console.error("Splice failed to return the moved item.");
+                           renderSelectedPages();
+                           return;
+                       }
                  }
                 renderSelectedPages(); // Always re-render
             });
@@ -841,7 +841,11 @@ window.onload = function() {
             }
             
             const addToc = addTocCheckbox.checked;
+            
+            // ▼▼▼ 讀取新增頁碼的選項 ▼▼▼
             const addPageNumbers = document.getElementById('addPageNumbersCheckbox').checked;
+            // ▲▲▲ 讀取新增頁碼的選項 ▲▲▲
+            
             let tocPages = []; // 追蹤所有目錄頁
             let tocLinkData = []; // 儲存目錄項目的位置資訊（用於後續建立超連結）
 
@@ -1039,25 +1043,26 @@ window.onload = function() {
                     
                     newPdf.addPage(copiedPage);
                     
-                    // 加上新的頁碼
+                    // ▼▼▼ 加上新的頁碼 (如果使用者有勾選) ▼▼▼
                     if (addPageNumbers) {
-                        const newPageNumber = `${pageCounterForContent + pageOffset}`;
-                        const { width, height } = copiedPage.getSize();
-                        
-                        if (width > 0 && height > 0) {
-                            copiedPage.drawText(newPageNumber, { 
-                                x: width - 40, 
-                                y: 30, 
-                                size: 10, 
-                                font: customFont, 
-                                color: rgb(0, 0, 0) 
-                            });
-                        } else { 
-                            console.warn(`Invalid dimensions page ${pageCounterForContent}`); 
-                        }
-                    }
-                    
-                } catch(loadError) catch(loadError) {
+                        const newPageNumber = `${pageCounterForContent + pageOffset}`;
+                        const { width, height } = copiedPage.getSize();
+                        
+                        if (width > 0 && height > 0) {
+                            copiedPage.drawText(newPageNumber, { 
+                                x: width - 40, 
+                                y: 30, 
+                                size: 10, 
+                                font: customFont, 
+                                color: rgb(0, 0, 0) 
+                            });
+                        } else { 
+                            console.warn(`Invalid dimensions page ${pageCounterForContent}`); 
+                        }
+                    }
+                    // ▲▲▲ 頁碼邏輯結束 ▲▲▲
+                    
+                } catch(loadError) {
                     console.error(`Error loading/copying page ${item.pageNum} from ${sourceFile.name}:`, loadError);
                     showNotification(`錯誤：無法處理檔案 "${sourceFile.name}" 第 ${item.pageNum} 頁。`, 'error');
                 }
