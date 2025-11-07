@@ -841,6 +841,7 @@ window.onload = function() {
             }
             
             const addToc = addTocCheckbox.checked;
+            const addPageNumbers = document.getElementById('addPageNumbersCheckbox').checked;
             let tocPages = []; // 追蹤所有目錄頁
             let tocLinkData = []; // 儲存目錄項目的位置資訊（用於後續建立超連結）
 
@@ -1039,21 +1040,24 @@ window.onload = function() {
                     newPdf.addPage(copiedPage);
                     
                     // 加上新的頁碼
-                    const newPageNumber = `${pageCounterForContent + pageOffset}`;
-                    const { width, height } = copiedPage.getSize();
-                    
-                    if (width > 0 && height > 0) {
-                        copiedPage.drawText(newPageNumber, { 
-                            x: width - 40, 
-                            y: 30, 
-                            size: 10, 
-                            font: customFont, 
-                            color: rgb(0, 0, 0) 
-                        });
-                    } else { 
-                        console.warn(`Invalid dimensions page ${pageCounterForContent}`); 
-                    }
-                } catch(loadError) {
+                    if (addPageNumbers) {
+                        const newPageNumber = `${pageCounterForContent + pageOffset}`;
+                        const { width, height } = copiedPage.getSize();
+                        
+                        if (width > 0 && height > 0) {
+                            copiedPage.drawText(newPageNumber, { 
+                                x: width - 40, 
+                                y: 30, 
+                                size: 10, 
+                                font: customFont, 
+                                color: rgb(0, 0, 0) 
+                            });
+                        } else { 
+                            console.warn(`Invalid dimensions page ${pageCounterForContent}`); 
+                        }
+                    }
+                    
+                } catch(loadError) catch(loadError) {
                     console.error(`Error loading/copying page ${item.pageNum} from ${sourceFile.name}:`, loadError);
                     showNotification(`錯誤：無法處理檔案 "${sourceFile.name}" 第 ${item.pageNum} 頁。`, 'error');
                 }
