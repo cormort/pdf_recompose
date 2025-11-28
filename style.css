@@ -567,3 +567,59 @@ input[type="file"] {
     cursor: pointer;
     line-height: 1.4;
 }
+/* --- 快速選取工具列樣式 --- */
+.quick-select-toolbar {
+    background: #eef2f3;
+    padding: 10px 15px;
+    border-bottom: 1px solid #bdc3c7;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 0; /* 緊接在標題下方 */
+}
+
+.qs-label {
+    font-size: 14px;
+    font-weight: bold;
+    color: #2c3e50;
+    white-space: nowrap;
+}
+
+.qs-select {
+    padding: 6px 10px;
+    border: 1px solid #bdc3c7;
+    border-radius: 4px;
+    background: white;
+    color: #2c3e50;
+    font-size: 13px;
+    flex: 1; /* 讓選單佔據空間 */
+    max-width: 200px;
+    cursor: pointer;
+}
+
+.qs-select:focus {
+    outline: none;
+    border-color: #3498db;
+}
+
+.btn-qs-action {
+    background: #3498db;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background 0.2s;
+    white-space: nowrap;
+}
+
+.btn-qs-action:hover {
+    background: #2980b9;
+}
+
+/* 讓 sourcePages 不要貼太緊 */
+#sourcePages {
+    margin-top: 10px; 
+}
