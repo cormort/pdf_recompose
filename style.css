@@ -623,3 +623,102 @@ input[type="file"] {
 #sourcePages {
     margin-top: 10px; 
 }
+/* --- 批次操作工具列 --- */
+.batch-toolbar {
+    background: #ecf0f1;
+    border-bottom: 2px solid #bdc3c7;
+    padding: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 10px;
+    border-radius: 4px;
+}
+
+.batch-select-group {
+    display: flex;
+    align-items: center;
+}
+
+.checkbox-label {
+    font-weight: bold;
+    color: #2c3e50;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.batch-btn-group {
+    display: flex;
+    gap: 5px;
+}
+
+.btn-batch {
+    padding: 6px 12px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: bold;
+    color: white;
+    transition: opacity 0.2s;
+}
+
+.btn-batch:hover { opacity: 0.9; }
+
+.btn-rotate-left, .btn-rotate-right { background-color: #f39c12; }
+.btn-add { background-color: #27ae60; }
+.btn-delete { background-color: #c0392b; }
+
+/* --- 來源頁面的 Checkbox 樣式 (Grid View) --- */
+.page-item {
+    position: relative; /* 確保 absolute 的 checkbox 定位正確 */
+}
+
+/* Checkbox 本體 */
+.page-checkbox {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    width: 20px;
+    height: 20px;
+    z-index: 20;
+    cursor: pointer;
+    accent-color: #2980b9; /* 藍色勾選框 */
+    transform: scale(1.2); /* 放大一點比較好點 */
+}
+
+/* 當頁面被勾選時的樣式 */
+.page-item.checked {
+    border-color: #2980b9;
+    background-color: #eaf2f8;
+    box-shadow: 0 0 8px rgba(41, 128, 185, 0.5);
+}
+
+/* --- 來源頁面的 Checkbox 樣式 (List View) --- */
+.page-list-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.page-list-item .page-checkbox {
+    position: static; /* List view 不需要 absolute */
+    transform: scale(1.2);
+}
+
+.page-list-item.checked {
+    border-color: #2980b9;
+    background-color: #eaf2f8;
+}
+
+/* 隱藏舊的刪除按鈕 (因為現在統一用 checkbox 刪除) */
+.page-item .delete-btn, .page-list-item .delete-btn {
+    display: none !important;
+}
+
+/* --- 旋轉視覺效果 --- */
+/* 我們用 style transform 來旋轉，不需要寫特定的 class */
