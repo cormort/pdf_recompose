@@ -16,6 +16,9 @@ window.onload = function() {
     let clearFilesConfirmMode = false;
     let clearSelectedConfirmMode = false;
     let isSourceEditMode = false;
+
+    let targetViewMode = 'grid'; // 預設為縮圖模式
+    let targetThumbnailSize = 'medium';
     
     // --- 新增變數：用於 PDF 預覽 ---
     let finalPdfBytes = null;
@@ -251,6 +254,14 @@ window.onload = function() {
     window.updateQuickSelectFileOptions = updateQuickSelectFileOptions;
     window.applyQuickSelection = applyQuickSelection;
     window.clearAllSourceChecks = clearAllSourceChecks; // 新增方便的清除功能
+    // 已選擇的頁面 函式註冊
+    window.setTargetViewMode = setTargetViewMode;
+    window.setTargetThumbnailSize = setTargetThumbnailSize;
+    window.toggleTargetCheck = toggleTargetCheck;
+    window.toggleSelectAllTarget = toggleSelectAllTarget;
+    window.applyTargetQuickSelection = applyTargetQuickSelection;
+    window.batchRotateTarget = batchRotateTarget;
+    window.batchDeleteFromTarget = batchDeleteFromTarget;
 
 
     function updateFileList() {
@@ -516,17 +527,48 @@ window.onload = function() {
     }
 
 
+// ==========================================
+    // === 右側 (Target) 面板功能函式
+    // ==========================================
+
+    function setTargetViewMode(mode) {
+        targetViewMode = mode;
+        document.getElementById('targetGridViewBtn').classList.toggle('active', mode === 'grid');
+        document.getElementById('targetListViewBtn').classList.toggle('active', mode === 'list');
+        renderSelectedPages();
+    }
+
+    function setTargetThumbnailSize(size) {
+        targetThumbnailSize = size;
+        const container = document.getElementById('targetPanel');
+        // 移除舊的 size class
+        container.classList.remove('size-small', 'size-medium', 'size-large');
+        container.classList.add(`size-${size}`);
+        
+        // 更新按鈕狀態
+        document.querySelectorAll('#target-size-toggle button').forEach(btn => btn.classList.remove('active'));
+        document.querySelector(`#target-size-toggle button[onclick="setTargetThumbnailSize('${size}')"]`).classList.add('active');
+    }
+
+    // ★★★ 重寫 renderSelectedPages 以支援 Grid/List 與 Checkbox ★★★
     function renderSelectedPages() {
         if (selectedPages.length === 0) {
             selectedPagesContainer.innerHTML = '<div class="empty-message">尚未選擇任何頁面</div>';
+            updateTargetSelectedInfo();
             return;
         }
+
+        // 根據 ViewMode 設定容器 class
+        selectedPagesContainer.className = `selected-pages ${targetViewMode}-view`;
+
         selectedPagesContainer.innerHTML = selectedPages.map((item, index) => {
              if (!item) return '';
-            if (item.type === 'divider') {
+             
+             // 如果是分隔線 (Section Divider)
+             if (item.type === 'divider') {
                 return `
                     <div class="selected-divider-item" draggable="true" data-index="${index}">
-                        <span class="drag-handle">⋮⋮</span>
+                        <span class="drag-handle">::</span>
                          <div class="selected-divider-title">${item.firstLine || 'New Section'}</div> 
                         <div class="page-actions">
                             <button class="btn btn-danger" onclick="removeSelectedPage(${index})">✕</button>
@@ -534,67 +576,164 @@ window.onload = function() {
                     </div>
                 `;
             }
-             const title = item.firstLine || `Page ${item.pageNum || '?'}`;
-             const source = `${item.fileName || 'Unknown File'} - 第 ${item.pageNum || '?'} 頁`;
-            return `
-                <div class="selected-page-item" draggable="true" data-index="${index}">
-                    <span class="drag-handle">⋮⋮</span>
-                    <canvas id="selected_${index}"></canvas>
+
+            // 一般頁面
+            const title = item.firstLine || `Page ${item.pageNum || '?'}`;
+            const source = `${item.fileName || 'Unknown File'} - 第 ${item.pageNum || '?'} 頁`;
+            const checkedAttr = item.isChecked ? 'checked' : '';
+            const checkedClass = item.isChecked ? 'checked' : '';
+            const rotationStyle = `transform: rotate(${item.rotation || 0}deg);`;
+            
+            // 點擊事件：切換勾選
+            const clickAction = `onclick="toggleTargetCheck(${index})"`;
+
+            if (targetViewMode === 'grid') {
+                return `
+                <div class="selected-page-item grid-item ${checkedClass}" draggable="true" data-index="${index}" ${clickAction}>
+                    <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleTargetCheck(${index})">
+                    <div class="canvas-wrapper">
+                        <canvas id="selected_${index}" style="${rotationStyle}"></canvas>
+                    </div>
+                    <div class="page-info-grid">
+                        <div class="page-num-badge">${index + 1}</div>
+                        <div class="page-title-grid" title="${title}">${title}</div>
+                    </div>
+                </div>`;
+            } else {
+                // List View
+                return `
+                <div class="selected-page-item list-item ${checkedClass}" draggable="true" data-index="${index}" ${clickAction}>
+                    <span class="drag-handle">::</span>
+                    <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleTargetCheck(${index})">
+                    <div class="list-thumb-wrapper">
+                        <canvas id="selected_${index}" style="${rotationStyle}"></canvas>
+                    </div>
                     <div class="selected-page-info">
-                        <div class="selected-page-title">${title}</div>
+                        <div class="selected-page-title">${index + 1}. ${title}</div>
                         <div class="selected-page-source">${source}</div>
                     </div>
-                    <div class="page-actions">
-                        <button class="btn-rotate" onclick="rotateSelectedPage(${index})" title="旋轉頁面">🔄</button>
-                        <button class="btn btn-danger" onclick="removeSelectedPage(${index})">✕</button>
-                    </div>
                 </div>
-            `;
+                `;
+            }
         }).join('');
 
-        // --- 修改：繪製 Canvas 縮圖，加入旋轉邏輯 ---
+        // 繪製 Canvas (邏輯與之前類似，但要注意縮圖大小)
         selectedPages.forEach((item, index) => {
              if (item && item.type !== 'divider') {
                  const canvas = document.getElementById(`selected_${index}`);
                  if (canvas && item.canvas) {
-                    
-                    const rotation = item.rotation || 0;
-                    let canvasWidth = item.canvas.width;
-                    let canvasHeight = item.canvas.height;
-
-                    // 根據旋轉角度，決定 canvas 的寬高是否對調
-                    if (rotation === 90 || rotation === 270) {
-                        canvas.width = canvasHeight;
-                        canvas.height = canvasWidth;
-                    } else {
-                        canvas.width = canvasWidth;
-                        canvas.height = canvasHeight;
-                    }
-
+                    // 這裡只負責繪製內容，旋轉由 CSS transform 處理
+                    // 為了效能，縮圖可以畫小一點，但這裡為了清晰度維持原比例
+                    canvas.width = item.canvas.width;
+                    canvas.height = item.canvas.height;
                     const ctx = canvas.getContext('2d');
-                    
-                    if (canvas.width > 0 && canvas.height > 0) {
-                        // 儲存當前狀態 (非常重要)
-                        ctx.save(); 
-                        
-                        // 將 canvas 座標原點移到中心
-                        ctx.translate(canvas.width / 2, canvas.height / 2);
-                        // 執行旋轉
-                        ctx.rotate(rotation * Math.PI / 180); 
-                        
-                        // 繪製圖片 (注意：因為原點在中心，所以 x, y 要是負的寬/高一半)
-                        // 繪圖時，要用「原始」canvas 的寬高
-                        ctx.drawImage(item.canvas, -canvasWidth / 2, -canvasHeight / 2, canvasWidth, canvasHeight);
-                        
-                        // 恢復 canvas 狀態
-                        ctx.restore();
-                    } else {
-                         console.warn(`Invalid canvas dimensions for selected_${index}`);
-                    }
+                    ctx.drawImage(item.canvas, 0, 0);
                  }
              }
         });
-        setupDragAndDrop();
+
+        setupDragAndDrop(); // 重新綁定拖曳事件
+        updateTargetSelectedInfo(); // 更新已選數量
+    }
+
+    // 1. 單選切換
+    function toggleTargetCheck(index) {
+        if (!selectedPages[index]) return;
+        // 如果該物件沒有 isChecked 屬性，先初始化
+        if (selectedPages[index].isChecked === undefined) selectedPages[index].isChecked = false;
+        
+        selectedPages[index].isChecked = !selectedPages[index].isChecked;
+        renderSelectedPages();
+    }
+
+    // 2. 全選切換
+    function toggleSelectAllTarget(checkbox) {
+        const checked = checkbox.checked;
+        selectedPages.forEach(p => {
+            if (p.type !== 'divider') p.isChecked = checked;
+        });
+        renderSelectedPages();
+    }
+
+    // 3. 智慧勾選邏輯
+    function applyTargetQuickSelection() {
+        const type = document.getElementById('qsTargetTypeSelect').value;
+        let count = 0;
+        
+        // 過濾掉分隔線，只計算實際頁面的索引位置
+        // 注意：這裡的 "奇數/偶數" 是指「在成品PDF中的順序」，不是原始頁碼
+        let pageIndexCounter = 0;
+
+        selectedPages.forEach((item) => {
+            if (item.type === 'divider') return;
+            
+            // pageIndexCounter 從 0 開始 (代表成品第1頁)
+            const currentPos = pageIndexCounter + 1; 
+            let shouldCheck = false;
+
+            switch (type) {
+                case 'all': shouldCheck = true; break;
+                case 'odd': shouldCheck = (currentPos % 2 !== 0); break;
+                case 'even': shouldCheck = (currentPos % 2 === 0); break;
+                case 'first': shouldCheck = (pageIndexCounter === 0); break;
+                case 'last': 
+                    // 這裡需要計算總頁數 (不含divider)
+                    const totalPages = selectedPages.filter(p => p.type !== 'divider').length;
+                    shouldCheck = (pageIndexCounter === totalPages - 1); 
+                    break;
+                case 'blank':
+                    // 檢查原始標題是否為預設值
+                    if (item.firstLine && item.firstLine.startsWith('Page ')) shouldCheck = true;
+                    break;
+            }
+
+            if (shouldCheck) {
+                item.isChecked = true;
+                count++;
+            }
+            pageIndexCounter++;
+        });
+
+        renderSelectedPages();
+        showNotification(`已勾選右側 ${count} 個頁面`, 'success');
+    }
+
+    // 4. 批次刪除
+    function batchDeleteFromTarget() {
+        const initialLen = selectedPages.length;
+        selectedPages = selectedPages.filter(p => !p.isChecked); // 只保留沒被勾選的
+        
+        const deletedCount = initialLen - selectedPages.length;
+        if (deletedCount > 0) {
+            renderSelectedPages();
+            document.getElementById('selectAllTarget').checked = false;
+            showNotification(`已從右側移除 ${deletedCount} 頁`, 'success');
+        } else {
+            showNotification('請先勾選右側頁面', 'info');
+        }
+    }
+
+    // 5. 批次旋轉
+    function batchRotateTarget(deg) {
+        let count = 0;
+        selectedPages.forEach(p => {
+            if (p.isChecked && p.type !== 'divider') {
+                const current = p.rotation || 0;
+                p.rotation = (current + deg + 360) % 360;
+                count++;
+            }
+        });
+        if (count > 0) {
+            renderSelectedPages();
+        } else {
+            showNotification('請先勾選右側頁面', 'info');
+        }
+    }
+
+    function updateTargetSelectedInfo() {
+        const count = selectedPages.filter(p => p.isChecked).length;
+        const el = document.getElementById('targetSelectedCountInfo');
+        if(el) el.textContent = `(${count})`;
     }
 
 
