@@ -248,6 +248,10 @@ window.onload = function() {
     window.batchDeleteFromSource = batchDeleteFromSource;
     window.batchRotateSource = batchRotateSource;
 
+    window.updateQuickSelectFileOptions = updateQuickSelectFileOptions;
+    window.applyQuickSelection = applyQuickSelection;
+    window.clearAllSourceChecks = clearAllSourceChecks; // 新增方便的清除功能
+
 
     function updateFileList() {
         fileList.innerHTML = pdfFiles.map((file, index) => `
@@ -259,6 +263,7 @@ window.onload = function() {
         
         // ▼▼▼ 新增：同步更新快速選取的檔案清單 ▼▼▼
         updateQuickSelectFileOptions();
+        
     }
 
     function removeFile(index) {
@@ -1227,7 +1232,6 @@ window.onload = function() {
         const qsFileSelect = document.getElementById('qsFileSelect');
         if (!qsFileSelect) return;
 
-        // 清空現有選項
         qsFileSelect.innerHTML = '';
 
         if (pdfFiles.length === 0) {
@@ -1238,13 +1242,11 @@ window.onload = function() {
             return;
         }
 
-        // 加入 "所有檔案" 選項
         const allOption = document.createElement('option');
         allOption.value = "-1";
         allOption.text = "📂 所有已載入檔案";
         qsFileSelect.appendChild(allOption);
 
-        // 加入個別檔案
         pdfFiles.forEach((file, index) => {
             const option = document.createElement('option');
             option.value = index;
@@ -1252,7 +1254,73 @@ window.onload = function() {
             qsFileSelect.appendChild(option);
         });
     }
+// 2. 執行「智慧勾選」 (Apply Quick Selection)
+    // 邏輯：根據下拉選單的條件，把符合的頁面 isChecked 設為 true
+    function applyQuickSelection() {
+        const fileIndexStr = document.getElementById('qsFileSelect').value;
+        const type = document.getElementById('qsTypeSelect').value;
+        const targetFileIndex = parseInt(fileIndexStr); 
 
+        if (pdfFiles.length === 0) {
+            showNotification('請先載入 PDF 檔案', 'error');
+            return;
+        }
+
+        let matchCount = 0;
+
+        // 定義檢查單一頁面的邏輯
+        const checkPageLogic = (file, page, pIndex) => {
+            let shouldCheck = false;
+            const pageNum = page.pageNum;
+
+            switch (type) {
+                case 'all': shouldCheck = true; break;
+                case 'odd': shouldCheck = (pageNum % 2 !== 0); break;
+                case 'even': shouldCheck = (pageNum % 2 === 0); break;
+                case 'first': shouldCheck = (pIndex === 0); break;
+                case 'last': shouldCheck = (pIndex === file.pages.length - 1); break;
+                case 'blank': 
+                    // 簡單判斷：如果標題沒抓到內容 (通常標題會是 "Page X")
+                    if (page.firstLine === `Page ${pageNum}`) shouldCheck = true;
+                    break;
+            }
+
+            if (shouldCheck) {
+                page.isChecked = true; // ★ 關鍵：只勾選，不取消已勾選的其他頁面 (累加模式)
+                matchCount++;
+            }
+        };
+
+        // 執行迴圈
+        if (targetFileIndex === -1) {
+            pdfFiles.forEach(file => {
+                file.pages.forEach((page, pIndex) => checkPageLogic(file, page, pIndex));
+            });
+        } else {
+            const file = pdfFiles[targetFileIndex];
+            if (file) {
+                file.pages.forEach((page, pIndex) => checkPageLogic(file, page, pIndex));
+            }
+        }
+
+        if (matchCount > 0) {
+            renderSourcePages(); // 重新渲染以顯示勾勾
+            updateSelectedCountInfo();
+            showNotification(`已自動勾選 ${matchCount} 個頁面`, 'success');
+        } else {
+            showNotification('沒有符合條件的頁面', 'info');
+        }
+    }
+
+    // 3. 快速取消所有勾選 (Helper function)
+    function clearAllSourceChecks() {
+        pdfFiles.forEach(file => {
+            file.pages.forEach(page => page.isChecked = false);
+        });
+        document.getElementById('selectAllSource').checked = false;
+        renderSourcePages();
+        updateSelectedCountInfo();
+    }
     function executeQuickSelect() {
         const fileIndexStr = document.getElementById('qsFileSelect').value;
         const type = document.getElementById('qsTypeSelect').value;
