@@ -221,6 +221,23 @@
                     <button id="editSourceBtn" class="btn-panel-action btn-edit" onclick="toggleSourceEditMode()">🗑️ 刪除頁面</button>
                 </div>
             </div>
+            <div class="quick-select-toolbar">
+                <span class="qs-label">⚡ 快速選取：</span>
+                <select id="qsFileSelect" class="qs-select">
+                    <option value="-1">-- 請先載入檔案 --</option>
+                </select>
+                <select id="qsTypeSelect" class="qs-select">
+                    <option value="all">全部頁面</option>
+                    <option value="odd">奇數頁 (1, 3, 5...)</option>
+                    <option value="even">偶數頁 (2, 4, 6...)</option>
+                    <option value="first">第一頁</option>
+                    <option value="last">最後一頁</option>
+                    <option value="blank">空白頁 (無文字)</option>
+                </select>
+                <button class="btn-qs-action" onclick="executeQuickSelect()">
+                    ➕ 加入選取
+                </button>
+            </div>
             <div id="sourcePages"></div>
         </div>
 
