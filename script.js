@@ -24,6 +24,8 @@ window.onload = function() {
     let finalPdfBytes = null;
     let currentPreviewUrl = null;
 
+    let lastSourceClickGlobalIndex = null; // 記錄上一次點擊的來源頁面索引
+
     // --- 檢查其他函式庫 ---
     if (typeof PDFLib === 'undefined') {
         console.error("CRITICAL: PDFLib is not defined when onload executes!");
@@ -401,14 +403,69 @@ window.onload = function() {
         renderSelectedPages();
     }
 
+    // ==========================================
+    // === 輔助函式：全域索引計算
+    // ==========================================
     function getGlobalPageIndex(fileIndex, pageIndex) {
         let count = 0;
         for (let i = 0; i < fileIndex; i++) {
-            if (pdfFiles[i]) {
-                 count += pdfFiles[i].pages.length;
-            }
+            if (pdfFiles[i]) count += pdfFiles[i].pages.length;
         }
         return count + pageIndex;
+    }
+
+    function getPageByGlobalIndex(globalIndex) {
+        let count = 0;
+        for (let i = 0; i < pdfFiles.length; i++) {
+            const file = pdfFiles[i];
+            if (globalIndex < count + file.pages.length) {
+                return { fileIndex: i, pageIndex: globalIndex - count };
+            }
+            count += file.pages.length;
+        }
+        return null;
+    }
+
+    // ==========================================
+    // === 核心：支援 Shift 多選的切換函式
+    // ==========================================
+    function toggleSourceCheck(fileIndex, pageIndex, event) {
+        if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return;
+        
+        const currentGlobalIndex = getGlobalPageIndex(fileIndex, pageIndex);
+        const targetPage = pdfFiles[fileIndex].pages[pageIndex];
+
+        // 判斷是否按住了 Shift 鍵，且之前有點擊過
+        if (event && event.shiftKey && lastSourceClickGlobalIndex !== null) {
+            
+            // 1. 先切換當前點擊頁面的狀態 (這是使用者的目標狀態)
+            targetPage.isChecked = !targetPage.isChecked;
+            const targetState = targetPage.isChecked; // 目標狀態 (全部都要變成這樣)
+
+            // 2. 計算範圍
+            const start = Math.min(lastSourceClickGlobalIndex, currentGlobalIndex);
+            const end = Math.max(lastSourceClickGlobalIndex, currentGlobalIndex);
+
+            // 3. 迴圈將範圍內的所有頁面設為目標狀態
+            for (let i = start; i <= end; i++) {
+                const pos = getPageByGlobalIndex(i);
+                if (pos) {
+                    pdfFiles[pos.fileIndex].pages[pos.pageIndex].isChecked = targetState;
+                }
+            }
+            
+            // Shift 連選後，最後點擊的位置依然更新為當前位置，方便連續操作
+            lastSourceClickGlobalIndex = currentGlobalIndex;
+
+        } else {
+            // --- 一般單點模式 ---
+            targetPage.isChecked = !targetPage.isChecked;
+            // 記錄這次點擊的位置，供下次 Shift 連選使用
+            lastSourceClickGlobalIndex = currentGlobalIndex;
+        }
+        
+        renderSourcePages();
+        updateSelectedCountInfo();
     }
     
     function getPageByGlobalIndex(globalIndex) {
@@ -496,22 +553,20 @@ window.onload = function() {
         if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return '';
         const page = pdfFiles[fileIndex].pages[pageIndex];
         
-        // 1. 取得勾選狀態
         const checkedAttr = page.isChecked ? 'checked' : '';
         const checkedClass = page.isChecked ? 'checked' : '';
-        
-        // 2. ★★★ 關鍵修正：確保讀取旋轉角度並轉為 CSS 樣式 ★★★
-        // 如果 undefined 則預設為 0
         const currentRotation = page.sourceRotation || 0; 
         const rotationStyle = `transform: rotate(${currentRotation}deg); transition: transform 0.3s;`;
         
-        // 3. 點擊事件 (點擊卡片等同於切換勾選)
-        const clickAction = `onclick="toggleSourceCheck(${fileIndex}, ${pageIndex})"`;
+        // ★★★ 修改處：在 onclick 中加入 event 參數 ★★★
+        const clickAction = `onclick="toggleSourceCheck(${fileIndex}, ${pageIndex}, event)"`;
+        // Checkbox 也要加 event，並阻止冒泡
+        const checkboxAction = `onclick="event.stopPropagation(); toggleSourceCheck(${fileIndex}, ${pageIndex}, event)"`;
 
         if (type === 'grid') {
             return `
                 <div class="page-item ${checkedClass}" ${clickAction}>
-                    <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleSourceCheck(${fileIndex}, ${pageIndex})">
+                    <input type="checkbox" class="page-checkbox" ${checkedAttr} ${checkboxAction}>
                     <div style="overflow:hidden; display:flex; justify-content:center; align-items:center; height: 100%; width: 100%;">
                         <canvas id="source_${fileIndex}_${pageIndex}" style="${rotationStyle}"></canvas>
                     </div>
@@ -521,7 +576,7 @@ window.onload = function() {
              const title = page.firstLine || `Page ${page.pageNum}`;
             return `
                 <div class="page-list-item ${checkedClass}" ${clickAction} title="${title}">
-                    <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleSourceCheck(${fileIndex}, ${pageIndex})">
+                    <input type="checkbox" class="page-checkbox" ${checkedAttr} ${checkboxAction}>
                     <div style="width: 30px; display: flex; justify-content: center;">
                         <canvas id="source_${fileIndex}_${pageIndex}" style="width: 100%; ${rotationStyle}"></canvas>
                     </div>
