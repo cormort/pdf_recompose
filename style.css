@@ -904,3 +904,45 @@ input[type="file"] {
     opacity: 0.4;
     border: 2px dashed #3498db;
 }
+/* --- 新增：工具列按鈕排版樣式 --- */
+
+/* 讓右側的按鈕區塊橫向排列 */
+.batch-btn-row {
+    display: flex;
+    align-items: center;
+    gap: 8px; /* 群組之間的間距 */
+}
+
+/* 垂直分隔線樣式 */
+.toolbar-separator {
+    width: 2px;
+    height: 24px;
+    background-color: #bdc3c7; /* 淺灰色線條 */
+    margin: 0 4px; /* 線條左右的緩衝 */
+}
+
+/* 微調按鈕樣式，確保高度一致 */
+.batch-btn-row .btn-batch,
+.batch-btn-row .btn-panel-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 32px; /* 強制高度一致 */
+    padding: 0 10px;
+    font-size: 13px;
+    border-radius: 4px;
+    border: none;
+    cursor: pointer;
+    color: white;
+    white-space: nowrap; /* 防止文字換行 */
+}
+
+/* 確保原本定義的顏色正確套用 */
+.btn-add-section { background-color: #16a085; }
+.btn-edit { background-color: #9b59b6; }
+.btn-clear { background-color: #e74c3c; }
+
+/* 滑鼠懸停效果 */
+.btn-add-section:hover { background-color: #117a65; }
+.btn-edit:hover { background-color: #8e44ad; }
+.btn-clear:hover { background-color: #c0392b; }
