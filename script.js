@@ -496,21 +496,23 @@ window.onload = function() {
         if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return '';
         const page = pdfFiles[fileIndex].pages[pageIndex];
         
-        // 判斷是否勾選
+        // 1. 取得勾選狀態
         const checkedAttr = page.isChecked ? 'checked' : '';
         const checkedClass = page.isChecked ? 'checked' : '';
         
-        // 判斷旋轉角度 (CSS Transform)
-        const rotationStyle = `transform: rotate(${page.sourceRotation || 0}deg);`;
+        // 2. ★★★ 關鍵修正：確保讀取旋轉角度並轉為 CSS 樣式 ★★★
+        // 如果 undefined 則預設為 0
+        const currentRotation = page.sourceRotation || 0; 
+        const rotationStyle = `transform: rotate(${currentRotation}deg); transition: transform 0.3s;`;
         
-        // 點擊事件改為切換勾選狀態
+        // 3. 點擊事件 (點擊卡片等同於切換勾選)
         const clickAction = `onclick="toggleSourceCheck(${fileIndex}, ${pageIndex})"`;
 
         if (type === 'grid') {
             return `
                 <div class="page-item ${checkedClass}" ${clickAction}>
                     <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleSourceCheck(${fileIndex}, ${pageIndex})">
-                    <div style="overflow:hidden; display:flex; justify-content:center; align-items:center;">
+                    <div style="overflow:hidden; display:flex; justify-content:center; align-items:center; height: 100%; width: 100%;">
                         <canvas id="source_${fileIndex}_${pageIndex}" style="${rotationStyle}"></canvas>
                     </div>
                     <div class="page-number">第 ${page.pageNum} 頁</div> 
@@ -520,6 +522,9 @@ window.onload = function() {
             return `
                 <div class="page-list-item ${checkedClass}" ${clickAction} title="${title}">
                     <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleSourceCheck(${fileIndex}, ${pageIndex})">
+                    <div style="width: 30px; display: flex; justify-content: center;">
+                        <canvas id="source_${fileIndex}_${pageIndex}" style="width: 100%; ${rotationStyle}"></canvas>
+                    </div>
                     <div class="page-list-text">${title}</div>
                     <div class="page-list-number">第 ${page.pageNum} 頁</div>
                 </div>`;
@@ -1667,13 +1672,22 @@ window.onload = function() {
     }
 
     // 6. 批次功能：旋轉來源頁面 (Rotate Source)
+    // 請確認此函式已加入 script.js
     function batchRotateSource(deg) {
         let rotatedCount = 0;
+        let hasSelection = false;
+
         pdfFiles.forEach(file => {
             file.pages.forEach(page => {
                 if (page.isChecked) {
-                    const current = page.sourceRotation || 0;
-                    // 計算新角度 (0, 90, 180, 270)
+                    hasSelection = true;
+                    // 初始化角度 (如果之前沒設定過)
+                    if (typeof page.sourceRotation === 'undefined') {
+                        page.sourceRotation = 0;
+                    }
+                    
+                    const current = page.sourceRotation;
+                    // 計算新角度
                     page.sourceRotation = (current + deg + 360) % 360;
                     rotatedCount++;
                 }
@@ -1681,9 +1695,14 @@ window.onload = function() {
         });
 
         if (rotatedCount > 0) {
-            renderSourcePages(); // 重新渲染以更新 CSS transform
+            renderSourcePages(); // 重新渲染畫面以顯示旋轉
+            // 可以在此加入 console.log 確認是否有執行
+            console.log(`已旋轉 ${rotatedCount} 個頁面`);
         } else {
-            showNotification('⚠️ 請先勾選要旋轉的頁面', 'info');
+            if (!hasSelection) {
+                // 如果使用者沒有勾選任何頁面，顯示提示
+                showNotification('⚠️ 請先勾選要旋轉的頁面 (左側來源)', 'info');
+            }
         }
     }
     
