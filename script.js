@@ -1616,19 +1616,7 @@ window.onload = function() {
             showNotification('沒有符合條件的頁面', 'info');
         }
     }
-//開始pdf頁面功能
-// 1. 切換單一頁面的勾選狀態
-    function toggleSourceCheck(fileIndex, pageIndex) {
-        if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return;
-        
-        const page = pdfFiles[fileIndex].pages[pageIndex];
-        page.isChecked = !page.isChecked;
-        
-        // 重新渲染該區域 (為了效能，這裡直接重新渲染全部有點浪費，但在純前端專案通常可接受)
-        // 更好的做法是只切換 DOM class，但為了確保縮圖旋轉等狀態一致，我們呼叫 render
-        renderSourcePages();
-        updateSelectedCountInfo();
-    }
+
 
     // 2. 全選 / 取消全選
     function toggleSelectAllSource(checkbox) {
