@@ -97,9 +97,16 @@ window.onload = function() {
                     await page.render({ canvasContext: context, viewport: viewport }).promise;
                     
                     const title = await extractTitleFromPage(page, i);
-                    fileData.pages.push({ pageNum: i, canvas: canvas, firstLine: title });
-                }
-                pdfFiles.push(fileData);
+                    fileData.pages.push({ 
+                    pageNum: i, 
+                    canvas: canvas, 
+                    firstLine: title,
+                    // ▼▼▼ 新增屬性 ▼▼▼
+                    isChecked: false, 
+                    sourceRotation: 0 
+                });
+            }
+            pdfFiles.push(fileData);
             } catch (error) {
                 console.error(`處理檔案 "${file.name}" 失敗:`, error);
                 showNotification(`處理檔案 "${file.name}" 失敗，檔案可能已損毀。`, 'error');
@@ -222,6 +229,7 @@ window.onload = function() {
     window.saveToc = saveToc;
     window.generatePDF = generatePDF;
     
+    
     // --- 新增：註冊新函式到 window ---
     window.rotateSelectedPage = rotateSelectedPage;
     window.downloadGeneratedPDF = downloadGeneratedPDF;
@@ -229,9 +237,16 @@ window.onload = function() {
     // ▼▼▼ 新增註冊 ▼▼▼
     window.executeQuickSelect = executeQuickSelect;
     
+    
     // 2. 在 window 函式註冊區加入：
     // === 註冊重設函式 ===
     window.resetTocSettings = resetTocSettings;
+    // ▼▼▼ 註冊開始pdf頁面的操作功能 ▼▼▼
+    window.toggleSourceCheck = toggleSourceCheck;
+    window.toggleSelectAllSource = toggleSelectAllSource;
+    window.batchAddToTarget = batchAddToTarget;
+    window.batchDeleteFromSource = batchDeleteFromSource;
+    window.batchRotateSource = batchRotateSource;
 
 
     function updateFileList() {
@@ -464,23 +479,33 @@ window.onload = function() {
     function renderPageItem(fileIndex, pageIndex, type) {
         if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return '';
         const page = pdfFiles[fileIndex].pages[pageIndex];
-        const isSelected = selectedPages.some(p => p.type !== 'divider' && p.fileIndex === fileIndex && p.pageNum === page.pageNum);
-        const clickAction = isSourceEditMode ? '' : `onclick="togglePage(${fileIndex}, ${pageIndex}, event)"`;
         
+        // 判斷是否勾選
+        const checkedAttr = page.isChecked ? 'checked' : '';
+        const checkedClass = page.isChecked ? 'checked' : '';
+        
+        // 判斷旋轉角度 (CSS Transform)
+        const rotationStyle = `transform: rotate(${page.sourceRotation || 0}deg);`;
+        
+        // 點擊事件改為切換勾選狀態
+        const clickAction = `onclick="toggleSourceCheck(${fileIndex}, ${pageIndex})"`;
+
         if (type === 'grid') {
             return `
-                <div class="page-item ${isSelected ? 'selected' : ''}" ${clickAction}>
-                    <button class="delete-btn" onclick="deleteSourcePage(${fileIndex}, ${pageIndex})">✕</button>
-                    <canvas id="source_${fileIndex}_${pageIndex}"></canvas>
-                    <div class="page-number">第 ${page.pageNum || '?'} 頁</div> 
+                <div class="page-item ${checkedClass}" ${clickAction}>
+                    <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleSourceCheck(${fileIndex}, ${pageIndex})">
+                    <div style="overflow:hidden; display:flex; justify-content:center; align-items:center;">
+                        <canvas id="source_${fileIndex}_${pageIndex}" style="${rotationStyle}"></canvas>
+                    </div>
+                    <div class="page-number">第 ${page.pageNum} 頁</div> 
                 </div>`;
         } else {
-             const title = page.firstLine || `Page ${page.pageNum || '?'}`;
+             const title = page.firstLine || `Page ${page.pageNum}`;
             return `
-                <div class="page-list-item ${isSelected ? 'selected' : ''}" ${clickAction} title="${title}">
+                <div class="page-list-item ${checkedClass}" ${clickAction} title="${title}">
+                    <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleSourceCheck(${fileIndex}, ${pageIndex})">
                     <div class="page-list-text">${title}</div>
-                    <div class="page-list-number">第 ${page.pageNum || '?'} 頁</div>
-                    <button class="delete-btn" onclick="deleteSourcePage(${fileIndex}, ${pageIndex})">刪除</button>
+                    <div class="page-list-number">第 ${page.pageNum} 頁</div>
                 </div>`;
         }
     }
@@ -1318,7 +1343,143 @@ window.onload = function() {
             showNotification('沒有符合條件的頁面', 'info');
         }
     }
+//開始pdf頁面功能
+// 1. 切換單一頁面的勾選狀態
+    function toggleSourceCheck(fileIndex, pageIndex) {
+        if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return;
+        
+        const page = pdfFiles[fileIndex].pages[pageIndex];
+        page.isChecked = !page.isChecked;
+        
+        // 重新渲染該區域 (為了效能，這裡直接重新渲染全部有點浪費，但在純前端專案通常可接受)
+        // 更好的做法是只切換 DOM class，但為了確保縮圖旋轉等狀態一致，我們呼叫 render
+        renderSourcePages();
+        updateSelectedCountInfo();
+    }
 
+    // 2. 全選 / 取消全選
+    function toggleSelectAllSource(checkbox) {
+        const isChecked = checkbox.checked;
+        pdfFiles.forEach(file => {
+            file.pages.forEach(page => {
+                page.isChecked = isChecked;
+            });
+        });
+        renderSourcePages();
+        updateSelectedCountInfo();
+    }
+
+    // 3. 更新「已選 X 頁」的文字提示
+    function updateSelectedCountInfo() {
+        let count = 0;
+        pdfFiles.forEach(f => f.pages.forEach(p => { if(p.isChecked) count++; }));
+        const info = document.getElementById('selectedCountInfo');
+        if(info) info.textContent = `(已選 ${count} 頁)`;
+    }
+
+    // 4. 批次功能：加入右側 (Add to Target)
+    function batchAddToTarget() {
+        let addedCount = 0;
+        pdfFiles.forEach((file, fIndex) => {
+            file.pages.forEach((page, pIndex) => {
+                if (page.isChecked) {
+                    // 複製一份資料到右側 selectedPages
+                    // 注意：我們會把 sourceRotation 帶過去，作為初始旋轉值
+                    selectedPages.push({ 
+                        type: 'page', 
+                        fileIndex: fIndex, 
+                        pageNum: page.pageNum, 
+                        fileName: file.name, 
+                        canvas: page.canvas, 
+                        firstLine: page.firstLine,
+                        rotation: page.sourceRotation || 0 
+                    });
+                    addedCount++;
+                    // 選項：加入後是否要取消勾選？
+                    // page.isChecked = false; 
+                }
+            });
+        });
+
+        if (addedCount > 0) {
+            renderSelectedPages();
+            showNotification(`✅ 已加入 ${addedCount} 個頁面到右側`, 'success');
+            // 自動捲動到底部
+            const container = document.getElementById('selectedPages');
+            container.scrollTop = container.scrollHeight;
+        } else {
+            showNotification('⚠️ 請先勾選要加入的頁面', 'info');
+        }
+    }
+
+    // 5. 批次功能：刪除來源頁面 (Delete from Source)
+    function batchDeleteFromSource() {
+        let deletedCount = 0;
+        
+        // 檢查是否有選取
+        let hasSelection = false;
+        pdfFiles.forEach(f => f.pages.forEach(p => { if(p.isChecked) hasSelection = true; }));
+        
+        if (!hasSelection) {
+            showNotification('⚠️ 請先勾選要刪除的頁面', 'info');
+            return;
+        }
+
+        if (!confirm("確定要從來源列表中刪除選取的頁面嗎？")) return;
+
+        // 因為要刪除陣列元素，建議從後往前刪，或者建立新陣列
+        // 這裡採用「建立新陣列」的方式比較穩當
+        const newPdfFiles = [];
+
+        pdfFiles.forEach(file => {
+            // 過濾掉被勾選(要刪除)的頁面
+            const remainingPages = file.pages.filter(p => {
+                if (p.isChecked) {
+                    deletedCount++;
+                    return false; // 刪除
+                }
+                return true; // 保留
+            });
+
+            // 如果該檔案還有頁面，就保留該檔案物件
+            if (remainingPages.length > 0) {
+                file.pages = remainingPages;
+                newPdfFiles.push(file);
+            }
+        });
+
+        pdfFiles = newPdfFiles;
+        
+        // 清除全選狀態
+        document.getElementById('selectAllSource').checked = false;
+        
+        updateFileList(); // 檔案可能被整個刪除，需更新列表
+        renderSourcePages();
+        updateSelectedCountInfo();
+        showNotification(`🗑️ 已刪除 ${deletedCount} 個頁面`, 'success');
+    }
+
+    // 6. 批次功能：旋轉來源頁面 (Rotate Source)
+    function batchRotateSource(deg) {
+        let rotatedCount = 0;
+        pdfFiles.forEach(file => {
+            file.pages.forEach(page => {
+                if (page.isChecked) {
+                    const current = page.sourceRotation || 0;
+                    // 計算新角度 (0, 90, 180, 270)
+                    page.sourceRotation = (current + deg + 360) % 360;
+                    rotatedCount++;
+                }
+            });
+        });
+
+        if (rotatedCount > 0) {
+            renderSourcePages(); // 重新渲染以更新 CSS transform
+        } else {
+            showNotification('⚠️ 請先勾選要旋轉的頁面', 'info');
+        }
+    }
+    
 // ==========================================================
 // === 關閉 window.onload 監聽器
 // ==========================================================
