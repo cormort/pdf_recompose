@@ -226,6 +226,8 @@ window.onload = function() {
     window.rotateSelectedPage = rotateSelectedPage;
     window.downloadGeneratedPDF = downloadGeneratedPDF;
     window.closePreview = closePreview;
+    // ▼▼▼ 新增註冊 ▼▼▼
+    window.executeQuickSelect = executeQuickSelect;
     
     // 2. 在 window 函式註冊區加入：
     // === 註冊重設函式 ===
@@ -239,6 +241,9 @@ window.onload = function() {
                 <button class="btn btn-danger" onclick="removeFile(${index})">✕</button>
             </li>
         `).join('');
+        
+        // ▼▼▼ 新增：同步更新快速選取的檔案清單 ▼▼▼
+        updateQuickSelectFileOptions();
     }
 
     function removeFile(index) {
@@ -1189,7 +1194,130 @@ window.onload = function() {
     if (addTocCheckbox.checked) {
         tocSettingsPanel.style.display = 'block';
     }
+// ==========================================================
+    // === 新增功能：快速選取邏輯
+    // ==========================================================
 
+    function updateQuickSelectFileOptions() {
+        const qsFileSelect = document.getElementById('qsFileSelect');
+        if (!qsFileSelect) return;
+
+        // 清空現有選項
+        qsFileSelect.innerHTML = '';
+
+        if (pdfFiles.length === 0) {
+            const option = document.createElement('option');
+            option.value = "-1";
+            option.text = "-- 請先載入檔案 --";
+            qsFileSelect.appendChild(option);
+            return;
+        }
+
+        // 加入 "所有檔案" 選項
+        const allOption = document.createElement('option');
+        allOption.value = "-1";
+        allOption.text = "📂 所有已載入檔案";
+        qsFileSelect.appendChild(allOption);
+
+        // 加入個別檔案
+        pdfFiles.forEach((file, index) => {
+            const option = document.createElement('option');
+            option.value = index;
+            option.text = `📄 ${index + 1}. ${file.name}`;
+            qsFileSelect.appendChild(option);
+        });
+    }
+
+    function executeQuickSelect() {
+        const fileIndexStr = document.getElementById('qsFileSelect').value;
+        const type = document.getElementById('qsTypeSelect').value;
+        const targetFileIndex = parseInt(fileIndexStr); // -1 代表所有檔案
+
+        if (pdfFiles.length === 0) {
+            showNotification('請先載入 PDF 檔案', 'error');
+            return;
+        }
+
+        let addedCount = 0;
+
+        // 定義處理單一檔案的邏輯
+        const processFile = (fIndex) => {
+            const file = pdfFiles[fIndex];
+            if (!file) return;
+
+            file.pages.forEach((page, pIndex) => {
+                let shouldSelect = false;
+                const pageNum = page.pageNum; // 實際頁碼 (從1開始)
+
+                switch (type) {
+                    case 'all':
+                        shouldSelect = true;
+                        break;
+                    case 'odd':
+                        shouldSelect = (pageNum % 2 !== 0);
+                        break;
+                    case 'even':
+                        shouldSelect = (pageNum % 2 === 0);
+                        break;
+                    case 'first':
+                        shouldSelect = (pIndex === 0);
+                        break;
+                    case 'last':
+                        shouldSelect = (pIndex === file.pages.length - 1);
+                        break;
+                    case 'blank':
+                        // 判斷空白頁邏輯：依賴 extractTitleFromPage 的結果
+                        // 如果標題完全等於 "Page X"，通常代表沒有提取到有意義的文字
+                        // 或是檢查 firstLine 是否包含特定關鍵字
+                        // *注意：這不是完美的空白頁檢測（因為掃描檔全是圖片），但對文字型PDF有效*
+                        if (page.firstLine === `Page ${pageNum}`) {
+                            shouldSelect = true;
+                        }
+                        break;
+                }
+
+                if (shouldSelect) {
+                    // 檢查是否已經在右側列表中 (避免重複加入)
+                    // 如果您希望允許重複，可以移除這個檢查，但通常使用者不希望重複
+                    // 這裡我設定為：直接加入，不進行去重檢查 (因為有時候需要複製頁面)
+                    // 如果要模仿 togglePage 的行為，我們就直接 push
+                    
+                    selectedPages.push({ 
+                        type: 'page', 
+                        fileIndex: fIndex, 
+                        pageNum: page.pageNum, 
+                        fileName: file.name, 
+                        canvas: page.canvas, 
+                        firstLine: page.firstLine,
+                        rotation: 0 
+                    });
+                    addedCount++;
+                }
+            });
+        };
+
+        // 判斷是處理單一檔案還是所有檔案
+        if (targetFileIndex === -1) {
+            // 所有檔案
+            for (let i = 0; i < pdfFiles.length; i++) {
+                processFile(i);
+            }
+        } else {
+            // 單一檔案
+            processFile(targetFileIndex);
+        }
+
+        if (addedCount > 0) {
+            renderSelectedPages();
+            showNotification(`已加入 ${addedCount} 個頁面`, 'success');
+            
+            // 自動滾動到底部以顯示新加入的頁面
+            const container = document.getElementById('selectedPages');
+            container.scrollTop = container.scrollHeight;
+        } else {
+            showNotification('沒有符合條件的頁面', 'info');
+        }
+    }
 
 // ==========================================================
 // === 關閉 window.onload 監聽器
