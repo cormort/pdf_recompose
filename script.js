@@ -429,20 +429,25 @@ window.onload = function() {
     // ==========================================
     // === 核心：支援 Shift 多選的切換函式
     // ==========================================
+    // ==========================================
+    // === 核心：支援 Shift 多選的切換函式 (修正版)
+    // ==========================================
     function toggleSourceCheck(fileIndex, pageIndex, event) {
         if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return;
         
         const currentGlobalIndex = getGlobalPageIndex(fileIndex, pageIndex);
         const targetPage = pdfFiles[fileIndex].pages[pageIndex];
 
-        // 判斷是否按住了 Shift 鍵，且之前有點擊過
+        // ★★★ 關鍵修正：判斷 Shift 鍵 ★★★
+        // 判斷是否按住了 Shift 鍵，且之前有點擊過有效的位置
         if (event && event.shiftKey && lastSourceClickGlobalIndex !== null) {
             
-            // 1. 先切換當前點擊頁面的狀態 (這是使用者的目標狀態)
+            // 1. 先改變「當前點擊頁面」的狀態，作為這次連選的目標狀態
+            //    (例如：原本沒勾，點下去變勾，那中間所有頁面都要變勾)
             targetPage.isChecked = !targetPage.isChecked;
-            const targetState = targetPage.isChecked; // 目標狀態 (全部都要變成這樣)
+            const targetState = targetPage.isChecked; 
 
-            // 2. 計算範圍
+            // 2. 計算範圍 (從小到大)
             const start = Math.min(lastSourceClickGlobalIndex, currentGlobalIndex);
             const end = Math.max(lastSourceClickGlobalIndex, currentGlobalIndex);
 
@@ -458,9 +463,10 @@ window.onload = function() {
             lastSourceClickGlobalIndex = currentGlobalIndex;
 
         } else {
-            // --- 一般單點模式 ---
+            // --- 一般單點模式 (沒有按 Shift) ---
             targetPage.isChecked = !targetPage.isChecked;
-            // 記錄這次點擊的位置，供下次 Shift 連選使用
+            
+            // ★★★ 關鍵：一定要記錄這次點擊的位置，下次 Shift 才能用 ★★★
             lastSourceClickGlobalIndex = currentGlobalIndex;
         }
         
