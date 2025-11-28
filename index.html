@@ -258,15 +258,59 @@
             <div id="sourcePages"></div>
         </div>
 
-        <div class="target-panel">
+        <div class="target-panel" id="targetPanel">
             <div class="panel-title">
-                <span>📋 已選擇的頁面</span>
+                <span>📋 已選擇的頁面 (成品)</span>
+                
                 <div class="panel-controls">
-                    <button class="btn-panel-action btn-add-section" onclick="addSectionDivider()">➕ 新增小節</button>
-                    <button class="btn-panel-action btn-edit" onclick="openTocEditor()">✏️ 批次編輯目錄</button>
-                    <button id="clearSelectedBtn" class="btn-panel-action btn-clear" onclick="clearSelectedPages()">🗑️ 清除選取</button>
+                    <div class="toggle-group">
+                        <button id="targetListViewBtn" onclick="setTargetViewMode('list')">清單</button>
+                        <button id="targetGridViewBtn" class="active" onclick="setTargetViewMode('grid')">縮圖</button>                        
+                    </div>
+                    <div class="toggle-group" id="target-size-toggle">
+                        <button onclick="setTargetThumbnailSize('small')">小</button>
+                        <button onclick="setTargetThumbnailSize('medium')">中</button>
+                        <button onclick="setTargetThumbnailSize('large')">大</button>
+                    </div>
                 </div>
             </div>
+
+            <div class="quick-select-toolbar">
+                <span class="qs-label">⚡ 智慧勾選：</span>
+                <select id="qsTargetTypeSelect" class="qs-select">
+                    <option value="all">全部頁面</option>
+                    <option value="odd">奇數排序 (第 1, 3, 5...張)</option>
+                    <option value="even">偶數排序 (第 2, 4, 6...張)</option>
+                    <option value="first">第一張</option>
+                    <option value="last">最後一張</option>
+                    <option value="blank">空白頁 (無文字)</option>
+                </select>
+                <button class="btn-qs-action" onclick="applyTargetQuickSelection()">
+                    ✅ 勾選
+                </button>
+            </div>
+
+            <div class="batch-toolbar">
+                <div class="batch-select-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="selectAllTarget" onchange="toggleSelectAllTarget(this)"> 全選
+                    </label>
+                    <span id="targetSelectedCountInfo" style="font-size: 12px; color: #666; margin-left: 8px;">(0)</span>
+                </div>
+                
+                <div class="batch-btn-group">
+                    <button class="btn-batch btn-rotate-left" onclick="batchRotateTarget(-90)" title="逆時針旋轉">↺ 左</button>
+                    <button class="btn-batch btn-rotate-right" onclick="batchRotateTarget(90)" title="順時針旋轉">↻ 右</button>
+                    <button class="btn-batch btn-delete" onclick="batchDeleteFromTarget()">🗑️ 刪除</button>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 10px; display:flex; gap:5px; flex-wrap:wrap;">
+                <button class="btn-panel-action btn-add-section" onclick="addSectionDivider()">➕ 新增小節</button>
+                <button class="btn-panel-action btn-edit" onclick="openTocEditor()">✏️ 編輯目錄</button>
+                <button class="btn-panel-action btn-clear" onclick="clearSelectedPages()">🗑️ 清空全部</button>
+            </div>
+
             <div class="selected-pages" id="selectedPages"></div>
         </div>
     </div>
