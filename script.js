@@ -1,43 +1,55 @@
 // ==========================================================
-// ===   *** 本地檔案 ***
-// === 確保所有函式庫 (包含本地 pdf.min.js) 都載入後才執行
+// ===   主程式進入點 (window.onload)
 // ==========================================================
 window.onload = function() {
 
-    // --- 設定 workerSrc 指向本地檔案 ---
+    // ------------------------------------------------------
+    // 1. 函式庫設定與全域變數 (Configuration & State)
+    // ------------------------------------------------------
+    
+    // 設定 PDF.js worker 路徑
     pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.js';
 
-    let pdfFiles = [];
-    let selectedPages = [];
-    let draggedElement = null;
-    let viewMode = 'list';
-    let thumbnailSize = 'medium';
-    let lastSelectedIndex = null;
-    let clearFilesConfirmMode = false;
-    let clearSelectedConfirmMode = false;
-    let isSourceEditMode = false;
-
-    let targetViewMode = 'grid'; // 預設為縮圖模式
-    let targetThumbnailSize = 'medium';
+    // 資料儲存容器
+    let pdfFiles = [];          // 存放載入的 PDF 檔案資訊
+    let selectedPages = [];     // 存放右側已選擇的頁面資訊
     
-    // --- 新增變數：用於 PDF 預覽 ---
+    // 介面狀態變數
+    let draggedElement = null;  // 目前拖曳的元素
+    let viewMode = 'list';      // 左側檢視模式 (list/grid)
+    let thumbnailSize = 'medium'; // 左側縮圖大小
+    let isSourceEditMode = false; // 左側是否處於編輯模式
+    
+    let targetViewMode = 'grid'; // 右側檢視模式
+    let targetThumbnailSize = 'medium'; // 右側縮圖大小
+
+    // 操作輔助變數
+    let lastSelectedIndex = null;       // (舊邏輯) 上次選擇索引
+    let lastSourceClickGlobalIndex = null; // (Shift多選) 上次點擊的全域索引
+    let clearFilesConfirmMode = false;    // 清除檔案確認鎖
+    let clearSelectedConfirmMode = false; // 清除已選確認鎖
+
+    // PDF 預覽相關
     let finalPdfBytes = null;
     let currentPreviewUrl = null;
 
-    let lastSourceClickGlobalIndex = null; // 記錄上一次點擊的來源頁面索引
-
-    // --- 檢查其他函式庫 ---
+    // ------------------------------------------------------
+    // 2. 函式庫檢查 (Dependency Check)
+    // ------------------------------------------------------
     if (typeof PDFLib === 'undefined') {
-        console.error("CRITICAL: PDFLib is not defined when onload executes!");
+        console.error("CRITICAL: PDFLib is not defined!");
         showNotification("錯誤：PDF 編輯函式庫 (pdf-lib.min.js) 載入失敗。", 'error');
         return;
     }
-     if (typeof fontkit === 'undefined') {
-        console.error("CRITICAL: fontkit is not defined when onload executes!");
+    if (typeof fontkit === 'undefined') {
+        console.error("CRITICAL: fontkit is not defined!");
         showNotification("錯誤：字型工具函式庫 (fontkit.umd.min.js) 載入失敗。", 'error');
-        return; // fontkit 對於載入字型至關重要
+        return; 
     }
 
+    // ------------------------------------------------------
+    // 3. DOM 元素快取 (DOM Elements)
+    // ------------------------------------------------------
     const uploadArea = document.getElementById('uploadArea');
     const fileInput = document.getElementById('fileInput');
     const fileList = document.getElementById('fileList');
@@ -47,13 +59,66 @@ window.onload = function() {
     const progress = document.getElementById('progress');
     const tocModal = document.getElementById('tocModal');
     const tocTextarea = document.getElementById('tocTextarea');
-    const notification = document.getElementById('notification'); // 新增：通知 DOM
-
-    // 1. 在變數宣告區（最上方）加入：
+    const notification = document.getElementById('notification');
     const addTocCheckbox = document.getElementById('addTocCheckbox');
     const tocSettingsPanel = document.getElementById('tocSettingsPanel');
+    const previewModal = document.getElementById('previewModal');
 
+    // ------------------------------------------------------
+    // 4. 公開函式註冊 (Export to Window)
+    // 說明：為了讓 HTML 中的 onclick="" 能夠呼叫，必須掛載到 window 下
+    // ------------------------------------------------------
+    
+    // 基礎與檔案操作
+    window.updateFileList = updateFileList;
+    window.removeFile = removeFile;
+    window.clearAllFiles = clearAllFiles;
+    
+    // 左側 (來源) 面板操作
+    window.setViewMode = setViewMode;
+    window.setThumbnailSize = setThumbnailSize;
+    window.toggleSourceEditMode = toggleSourceEditMode; // (舊)
+    window.deleteSourcePage = deleteSourcePage; // (舊)
+    window.togglePage = togglePage; // (舊)
+    window.toggleSourceCheck = toggleSourceCheck;
+    window.toggleSelectAllSource = toggleSelectAllSource;
+    window.batchAddToTarget = batchAddToTarget;
+    window.batchDeleteFromSource = batchDeleteFromSource;
+    window.batchRotateSource = batchRotateSource;
+    window.updateQuickSelectFileOptions = updateQuickSelectFileOptions;
+    window.applyQuickSelection = applyQuickSelection;
+    window.clearAllSourceChecks = clearAllSourceChecks;
+    window.executeQuickSelect = executeQuickSelect;
 
+    // 右側 (成品) 面板操作
+    window.setTargetViewMode = setTargetViewMode;
+    window.setTargetThumbnailSize = setTargetThumbnailSize;
+    window.toggleTargetCheck = toggleTargetCheck;
+    window.toggleSelectAllTarget = toggleSelectAllTarget;
+    window.applyTargetQuickSelection = applyTargetQuickSelection;
+    window.batchRotateTarget = batchRotateTarget;
+    window.batchDeleteFromTarget = batchDeleteFromTarget;
+    window.removeSelectedPage = removeSelectedPage;
+    window.clearSelectedPages = clearSelectedPages;
+    window.addSectionDivider = addSectionDivider;
+    window.rotateSelectedPage = rotateSelectedPage;
+
+    // 目錄與設定
+    window.openTocEditor = openTocEditor;
+    window.closeTocEditor = closeTocEditor;
+    window.saveToc = saveToc;
+    window.resetTocSettings = resetTocSettings;
+
+    // PDF 生成與預覽
+    window.generatePDF = generatePDF;
+    window.downloadGeneratedPDF = downloadGeneratedPDF;
+    window.closePreview = closePreview;
+
+    // ------------------------------------------------------
+    // 5. 事件監聽器綁定 (Event Listeners)
+    // ------------------------------------------------------
+    
+    // 拖曳上傳
     uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('drag-over'); });
     uploadArea.addEventListener('dragleave', () => { uploadArea.classList.remove('drag-over'); });
     uploadArea.addEventListener('drop', (e) => {
@@ -64,21 +129,72 @@ window.onload = function() {
     });
     fileInput.addEventListener('change', (e) => { handleFiles(Array.from(e.target.files)); });
 
-    // ==========================================================
-    // === 新函式：顯示通知
-    // ==========================================================
+    // Modal 點擊外部關閉
+    tocModal.addEventListener('click', (e) => { if (e.target === tocModal) closeTocEditor(); });
+    previewModal.addEventListener('click', (e) => { if (e.target === previewModal) closePreview(); });
+
+    // 目錄設定面板切換
+    addTocCheckbox.addEventListener('change', function() {
+        tocSettingsPanel.style.display = this.checked ? 'block' : 'none';
+    });
+
+    // ------------------------------------------------------
+    // 6. 初始化執行 (Initialization)
+    // ------------------------------------------------------
+    setThumbnailSize('medium'); // 設定預設縮圖大小
+    if (addTocCheckbox.checked) {
+        tocSettingsPanel.style.display = 'block';
+    }
+
+    // ======================================================
+    // === 邏輯區塊：工具與通用函式 (Utilities)
+    // ======================================================
+
     function showNotification(message, type = 'error') {
         if (!notification) return;
-        
         notification.textContent = message;
-        notification.className = type; // 'error', 'success', 'info'
+        notification.className = type; 
         notification.classList.add('show');
-        
-        setTimeout(() => {
-            notification.classList.remove('show');
-        }, 3000);
+        setTimeout(() => { notification.classList.remove('show'); }, 3000);
     }
-    
+
+    function updateSelectedCountInfo() {
+        let count = 0;
+        pdfFiles.forEach(f => f.pages.forEach(p => { if(p.isChecked) count++; }));
+        const info = document.getElementById('selectedCountInfo');
+        if(info) info.textContent = `(已選 ${count} 頁)`;
+    }
+
+    function updateTargetSelectedInfo() {
+        const count = selectedPages.filter(p => p.isChecked).length;
+        const el = document.getElementById('targetSelectedCountInfo');
+        if(el) el.textContent = `(${count})`;
+    }
+
+    function getGlobalPageIndex(fileIndex, pageIndex) {
+        let count = 0;
+        for (let i = 0; i < fileIndex; i++) {
+            if (pdfFiles[i]) count += pdfFiles[i].pages.length;
+        }
+        return count + pageIndex;
+    }
+
+    function getPageByGlobalIndex(globalIndex) {
+        let count = 0;
+        for (let i = 0; i < pdfFiles.length; i++) {
+            const file = pdfFiles[i];
+            if (globalIndex < count + file.pages.length) {
+                return { fileIndex: i, pageIndex: globalIndex - count };
+            }
+            count += file.pages.length;
+        }
+        return null;
+    }
+
+    // ======================================================
+    // === 邏輯區塊：檔案處理 (File Processing)
+    // ======================================================
+
     async function handleFiles(files) {
         if (files.length === 0) return;
         
@@ -103,15 +219,14 @@ window.onload = function() {
                     
                     const title = await extractTitleFromPage(page, i);
                     fileData.pages.push({ 
-                    pageNum: i, 
-                    canvas: canvas, 
-                    firstLine: title,
-                    // ▼▼▼ 新增屬性 ▼▼▼
-                    isChecked: false, 
-                    sourceRotation: 0 
-                });
-            }
-            pdfFiles.push(fileData);
+                        pageNum: i, 
+                        canvas: canvas, 
+                        firstLine: title,
+                        isChecked: false, 
+                        sourceRotation: 0 
+                    });
+                }
+                pdfFiles.push(fileData);
             } catch (error) {
                 console.error(`處理檔案 "${file.name}" 失敗:`, error);
                 showNotification(`處理檔案 "${file.name}" 失敗，檔案可能已損毀。`, 'error');
@@ -122,9 +237,7 @@ window.onload = function() {
 
         progress.textContent = '✅ 檔案載入完成！';
         progress.classList.add('success');
-        setTimeout(() => {
-            progress.classList.remove('active', 'success');
-        }, 2000);
+        setTimeout(() => { progress.classList.remove('active', 'success'); }, 2000);
     }
 
     async function extractTitleFromPage(page, pageNum) {
@@ -144,9 +257,7 @@ window.onload = function() {
                 .filter(item => item.text.length > 0)
                 .sort((a, b) => b.y - a.y || a.x - b.x);
 
-            if (items.length === 0) {
-                 return `Page ${pageNum}`;
-            }
+            if (items.length === 0) return `Page ${pageNum}`;
 
             const lines = [];
             let currentLine = [items[0]];
@@ -160,11 +271,9 @@ window.onload = function() {
             }
             lines.push(currentLine.sort((a, b) => a.x - b.x));
 
-
             let title = `Page ${pageNum}`;
             if (lines.length > 0 && lines[0].length > 0) {
                 let titleLineText = lines[0].map(item => item.text).join(' ');
-                
                 if (lines.length > 1 && lines[1].length > 0) {
                     const firstLineY = lines[0][0].y;
                     const firstLineHeight = lines[0][0].height;
@@ -175,7 +284,6 @@ window.onload = function() {
                 }
 
                 let cleanedTitle = titleLineText;
-
                 // --- Title cleaning logic ---
                 if (!/^\d+\s*年度/.test(cleanedTitle.trim())) {
                     cleanedTitle = cleanedTitle.replace(/^[\d\s.\-•]+\s*/, '');
@@ -183,9 +291,7 @@ window.onload = function() {
                 const stopChars = ['一、', '二、', '（一）', '附註', '說明：', '中華民國'];
                 for (const char of stopChars) {
                     const pos = cleanedTitle.indexOf(char);
-                    if (pos !== -1) {
-                        cleanedTitle = cleanedTitle.substring(0, pos).trim();
-                    }
+                    if (pos !== -1) cleanedTitle = cleanedTitle.substring(0, pos).trim();
                 }
                 const specialKeywords = ["說明", "表", "情形"];
                 let earliestIndex = -1; let keywordLength = 0;
@@ -206,9 +312,7 @@ window.onload = function() {
                 }
                 // --- End Title cleaning logic ---
 
-                if (cleanedTitle) {
-                    title = cleanedTitle;
-                }
+                if (cleanedTitle) title = cleanedTitle;
             }
             return title;
         } catch (error) {
@@ -217,55 +321,6 @@ window.onload = function() {
         }
     }
 
-    // Assign functions to window scope *within* onload
-    window.updateFileList = updateFileList;
-    window.removeFile = removeFile;
-    window.clearAllFiles = clearAllFiles;
-    window.setViewMode = setViewMode;
-    window.setThumbnailSize = setThumbnailSize;
-    window.toggleSourceEditMode = toggleSourceEditMode;
-    window.deleteSourcePage = deleteSourcePage;
-    window.togglePage = togglePage;
-    window.clearSelectedPages = clearSelectedPages;
-    window.addSectionDivider = addSectionDivider;
-    window.removeSelectedPage = removeSelectedPage;
-    window.openTocEditor = openTocEditor;
-    window.closeTocEditor = closeTocEditor;
-    window.saveToc = saveToc;
-    window.generatePDF = generatePDF;
-    
-    
-    // --- 新增：註冊新函式到 window ---
-    window.rotateSelectedPage = rotateSelectedPage;
-    window.downloadGeneratedPDF = downloadGeneratedPDF;
-    window.closePreview = closePreview;
-    // ▼▼▼ 新增註冊 ▼▼▼
-    window.executeQuickSelect = executeQuickSelect;
-    
-    
-    // 2. 在 window 函式註冊區加入：
-    // === 註冊重設函式 ===
-    window.resetTocSettings = resetTocSettings;
-    // ▼▼▼ 註冊開始pdf頁面的操作功能 ▼▼▼
-    window.toggleSourceCheck = toggleSourceCheck;
-    window.toggleSelectAllSource = toggleSelectAllSource;
-    window.batchAddToTarget = batchAddToTarget;
-    window.batchDeleteFromSource = batchDeleteFromSource;
-    window.batchRotateSource = batchRotateSource;
-
-    window.updateQuickSelectFileOptions = updateQuickSelectFileOptions;
-    window.applyQuickSelection = applyQuickSelection;
-    window.clearAllSourceChecks = clearAllSourceChecks; // 新增方便的清除功能
-    // 已選擇的頁面 函式註冊
-    window.setTargetViewMode = setTargetViewMode;
-    window.setTargetThumbnailSize = setTargetThumbnailSize;
-    window.toggleTargetCheck = toggleTargetCheck;
-    window.toggleSelectAllTarget = toggleSelectAllTarget;
-    window.applyTargetQuickSelection = applyTargetQuickSelection;
-    window.batchRotateTarget = batchRotateTarget;
-    window.batchDeleteFromTarget = batchDeleteFromTarget;
-
-
     function updateFileList() {
         fileList.innerHTML = pdfFiles.map((file, index) => `
             <li class="file-list-item">
@@ -273,10 +328,7 @@ window.onload = function() {
                 <button class="btn btn-danger" onclick="removeFile(${index})">✕</button>
             </li>
         `).join('');
-        
-        // ▼▼▼ 新增：同步更新快速選取的檔案清單 ▼▼▼
         updateQuickSelectFileOptions();
-        
     }
 
     function removeFile(index) {
@@ -316,6 +368,10 @@ window.onload = function() {
         renderSelectedPages();
     }
 
+    // ======================================================
+    // === 邏輯區塊：左側來源面板 (Source Panel)
+    // ======================================================
+
     function setViewMode(mode) {
         viewMode = mode;
         document.getElementById('gridViewBtn').classList.toggle('active', mode === 'grid');
@@ -341,19 +397,122 @@ window.onload = function() {
         renderSourcePages();
     }
 
-    function deleteSourcePage(fileIndex, pageIndex) {
-        if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return;
-        const pageToDelete = pdfFiles[fileIndex].pages[pageIndex];
-        selectedPages = selectedPages.filter(p => !(p.type !== 'divider' && p.fileIndex === fileIndex && p.pageNum === pageToDelete.pageNum));
-        pdfFiles[fileIndex].pages.splice(pageIndex, 1);
-        if (pdfFiles[fileIndex].pages.length === 0) {
-            removeFile(fileIndex);
+    function renderSourcePages() {
+        if (pdfFiles.length === 0) {
+            sourcePages.innerHTML = '<div class="empty-message">尚未載入任何 PDF 檔案</div>';
+            return;
+        }
+        sourcePages.innerHTML = pdfFiles.map((file, fileIndex) => {
+             if (!file) return '';
+             const pagesHtml = viewMode === 'grid' 
+                ? `<div class="pages-grid">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'grid')).join('')}</div>`
+                : `<div class="pages-list">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'list')).join('')}</div>`;
+             return `<div class="pdf-file"><div class="pdf-file-header"><div class="pdf-file-name">${file.name || 'Unknown File'}</div></div>${pagesHtml}</div>`;
+        }).join('');
+
+        pdfFiles.forEach((file, fileIndex) => {
+             if (file) {
+                 file.pages.forEach((page, pageIndex) => {
+                     const canvas = document.getElementById(`source_${fileIndex}_${pageIndex}`);
+                     if (canvas && page.canvas) {
+                         const ctx = canvas.getContext('2d');
+                         if (page.canvas.width > 0 && page.canvas.height > 0) {
+                             canvas.width = page.canvas.width;
+                             canvas.height = page.canvas.height;
+                             ctx.drawImage(page.canvas, 0, 0);
+                         } else {
+                             console.warn(`Invalid canvas dimensions for source_${fileIndex}_${pageIndex}`);
+                         }
+                     }
+                 });
+             }
+        });
+    }
+
+    function renderPageItem(fileIndex, pageIndex, type) {
+        if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return '';
+        const page = pdfFiles[fileIndex].pages[pageIndex];
+        
+        const checkedAttr = page.isChecked ? 'checked' : '';
+        const checkedClass = page.isChecked ? 'checked' : '';
+        const currentRotation = page.sourceRotation || 0; 
+        const rotationStyle = `transform: rotate(${currentRotation}deg); transition: transform 0.3s;`;
+        
+        // onclick 傳遞 event 參數以支援 shift 多選
+        const clickAction = `onclick="toggleSourceCheck(${fileIndex}, ${pageIndex}, event)"`;
+        const checkboxAction = `onclick="event.stopPropagation(); toggleSourceCheck(${fileIndex}, ${pageIndex}, event)"`;
+
+        if (type === 'grid') {
+            return `
+                <div class="page-item ${checkedClass}" ${clickAction}>
+                    <input type="checkbox" class="page-checkbox" ${checkedAttr} ${checkboxAction}>
+                    <div style="overflow:hidden; display:flex; justify-content:center; align-items:center; height: 100%; width: 100%;">
+                        <canvas id="source_${fileIndex}_${pageIndex}" style="${rotationStyle}"></canvas>
+                    </div>
+                    <div class="page-number">第 ${page.pageNum} 頁</div> 
+                </div>`;
         } else {
-            renderSourcePages();
-            renderSelectedPages();
+             const title = page.firstLine || `Page ${page.pageNum}`;
+            return `
+                <div class="page-list-item ${checkedClass}" ${clickAction} title="${title}">
+                    <input type="checkbox" class="page-checkbox" ${checkedAttr} ${checkboxAction}>
+                    <div style="width: 30px; display: flex; justify-content: center;">
+                        <canvas id="source_${fileIndex}_${pageIndex}" style="width: 100%; ${rotationStyle}"></canvas>
+                    </div>
+                    <div class="page-list-text">${title}</div>
+                    <div class="page-list-number">第 ${page.pageNum} 頁</div>
+                </div>`;
         }
     }
 
+    // 核心選取邏輯 (支援 Shift)
+    function toggleSourceCheck(fileIndex, pageIndex, event) {
+        if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return;
+        
+        const currentGlobalIndex = getGlobalPageIndex(fileIndex, pageIndex);
+        const targetPage = pdfFiles[fileIndex].pages[pageIndex];
+
+        // 判斷是否按住了 Shift 鍵，且之前有點擊過有效的位置
+        if (event && event.shiftKey && lastSourceClickGlobalIndex !== null) {
+            
+            // 1. 先改變「當前點擊頁面」的狀態
+            targetPage.isChecked = !targetPage.isChecked;
+            const targetState = targetPage.isChecked; 
+
+            // 2. 計算範圍
+            const start = Math.min(lastSourceClickGlobalIndex, currentGlobalIndex);
+            const end = Math.max(lastSourceClickGlobalIndex, currentGlobalIndex);
+
+            // 3. 迴圈設定狀態
+            for (let i = start; i <= end; i++) {
+                const pos = getPageByGlobalIndex(i);
+                if (pos) {
+                    pdfFiles[pos.fileIndex].pages[pos.pageIndex].isChecked = targetState;
+                }
+            }
+            lastSourceClickGlobalIndex = currentGlobalIndex;
+        } else {
+            // 一般單點
+            targetPage.isChecked = !targetPage.isChecked;
+            lastSourceClickGlobalIndex = currentGlobalIndex;
+        }
+        
+        renderSourcePages();
+        updateSelectedCountInfo();
+    }
+
+    function toggleSelectAllSource(checkbox) {
+        const isChecked = checkbox.checked;
+        pdfFiles.forEach(file => {
+            file.pages.forEach(page => {
+                page.isChecked = isChecked;
+            });
+        });
+        renderSourcePages();
+        updateSelectedCountInfo();
+    }
+
+    // 舊版選取邏輯 (目前保留以相容舊代碼，但 UI 主要使用 toggleSourceCheck)
     function togglePage(fileIndex, pageIndex, event) {
         if (isSourceEditMode) return;
         if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return;
@@ -375,7 +534,7 @@ window.onload = function() {
                             fileName: f.name, 
                             canvas: p.canvas, 
                             firstLine: p.firstLine,
-                            rotation: 0 // <-- 新增：旋轉屬性
+                            rotation: 0 
                         });
                     }
                 }
@@ -394,7 +553,7 @@ window.onload = function() {
                     fileName: file.name, 
                     canvas: page.canvas, 
                     firstLine: page.firstLine,
-                    rotation: 0 // <-- 新增：旋轉屬性
+                    rotation: 0
                 });
             }
         }
@@ -403,89 +562,449 @@ window.onload = function() {
         renderSelectedPages();
     }
 
-    // ==========================================
-    // === 輔助函式：全域索引計算
-    // ==========================================
-    function getGlobalPageIndex(fileIndex, pageIndex) {
-        let count = 0;
-        for (let i = 0; i < fileIndex; i++) {
-            if (pdfFiles[i]) count += pdfFiles[i].pages.length;
-        }
-        return count + pageIndex;
-    }
-
-    function getPageByGlobalIndex(globalIndex) {
-        let count = 0;
-        for (let i = 0; i < pdfFiles.length; i++) {
-            const file = pdfFiles[i];
-            if (globalIndex < count + file.pages.length) {
-                return { fileIndex: i, pageIndex: globalIndex - count };
-            }
-            count += file.pages.length;
-        }
-        return null;
-    }
-
-    // ==========================================
-    // === 核心：支援 Shift 多選的切換函式
-    // ==========================================
-    // ==========================================
-    // === 核心：支援 Shift 多選的切換函式 (修正版)
-    // ==========================================
-    function toggleSourceCheck(fileIndex, pageIndex, event) {
+    // 舊版刪除邏輯
+    function deleteSourcePage(fileIndex, pageIndex) {
         if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return;
-        
-        const currentGlobalIndex = getGlobalPageIndex(fileIndex, pageIndex);
-        const targetPage = pdfFiles[fileIndex].pages[pageIndex];
-
-        // ★★★ 關鍵修正：判斷 Shift 鍵 ★★★
-        // 判斷是否按住了 Shift 鍵，且之前有點擊過有效的位置
-        if (event && event.shiftKey && lastSourceClickGlobalIndex !== null) {
-            
-            // 1. 先改變「當前點擊頁面」的狀態，作為這次連選的目標狀態
-            //    (例如：原本沒勾，點下去變勾，那中間所有頁面都要變勾)
-            targetPage.isChecked = !targetPage.isChecked;
-            const targetState = targetPage.isChecked; 
-
-            // 2. 計算範圍 (從小到大)
-            const start = Math.min(lastSourceClickGlobalIndex, currentGlobalIndex);
-            const end = Math.max(lastSourceClickGlobalIndex, currentGlobalIndex);
-
-            // 3. 迴圈將範圍內的所有頁面設為目標狀態
-            for (let i = start; i <= end; i++) {
-                const pos = getPageByGlobalIndex(i);
-                if (pos) {
-                    pdfFiles[pos.fileIndex].pages[pos.pageIndex].isChecked = targetState;
-                }
-            }
-            
-            // Shift 連選後，最後點擊的位置依然更新為當前位置，方便連續操作
-            lastSourceClickGlobalIndex = currentGlobalIndex;
-
+        const pageToDelete = pdfFiles[fileIndex].pages[pageIndex];
+        selectedPages = selectedPages.filter(p => !(p.type !== 'divider' && p.fileIndex === fileIndex && p.pageNum === pageToDelete.pageNum));
+        pdfFiles[fileIndex].pages.splice(pageIndex, 1);
+        if (pdfFiles[fileIndex].pages.length === 0) {
+            removeFile(fileIndex);
         } else {
-            // --- 一般單點模式 (沒有按 Shift) ---
-            targetPage.isChecked = !targetPage.isChecked;
-            
-            // ★★★ 關鍵：一定要記錄這次點擊的位置，下次 Shift 才能用 ★★★
-            lastSourceClickGlobalIndex = currentGlobalIndex;
+            renderSourcePages();
+            renderSelectedPages();
         }
+    }
+
+    // --- 批次操作 (Source) ---
+
+    function batchAddToTarget() {
+        let addedCount = 0;
+        pdfFiles.forEach((file, fIndex) => {
+            file.pages.forEach((page, pIndex) => {
+                if (page.isChecked) {
+                    selectedPages.push({ 
+                        type: 'page', 
+                        fileIndex: fIndex, 
+                        pageNum: page.pageNum, 
+                        fileName: file.name, 
+                        canvas: page.canvas, 
+                        firstLine: page.firstLine,
+                        rotation: page.sourceRotation || 0 
+                    });
+                    addedCount++;
+                }
+            });
+        });
+
+        if (addedCount > 0) {
+            renderSelectedPages();
+            showNotification(`✅ 已加入 ${addedCount} 個頁面到右側`, 'success');
+            const container = document.getElementById('selectedPages');
+            container.scrollTop = container.scrollHeight;
+        } else {
+            showNotification('⚠️ 請先勾選要加入的頁面', 'info');
+        }
+    }
+
+    function batchDeleteFromSource() {
+        let deletedCount = 0;
+        let hasSelection = false;
+        pdfFiles.forEach(f => f.pages.forEach(p => { if(p.isChecked) hasSelection = true; }));
         
+        if (!hasSelection) {
+            showNotification('⚠️ 請先勾選要刪除的頁面', 'info');
+            return;
+        }
+
+        if (!confirm("確定要從來源列表中刪除選取的頁面嗎？")) return;
+
+        const newPdfFiles = [];
+        pdfFiles.forEach(file => {
+            const remainingPages = file.pages.filter(p => {
+                if (p.isChecked) {
+                    deletedCount++;
+                    return false;
+                }
+                return true;
+            });
+            if (remainingPages.length > 0) {
+                file.pages = remainingPages;
+                newPdfFiles.push(file);
+            }
+        });
+
+        pdfFiles = newPdfFiles;
+        document.getElementById('selectAllSource').checked = false;
+        
+        updateFileList();
+        renderSourcePages();
+        updateSelectedCountInfo();
+        showNotification(`🗑️ 已刪除 ${deletedCount} 個頁面`, 'success');
+    }
+
+    function batchRotateSource(deg) {
+        let rotatedCount = 0;
+        let hasSelection = false;
+
+        pdfFiles.forEach(file => {
+            file.pages.forEach(page => {
+                if (page.isChecked) {
+                    hasSelection = true;
+                    if (typeof page.sourceRotation === 'undefined') page.sourceRotation = 0;
+                    const current = page.sourceRotation;
+                    page.sourceRotation = (current + deg + 360) % 360;
+                    rotatedCount++;
+                }
+            });
+        });
+
+        if (rotatedCount > 0) {
+            renderSourcePages();
+            console.log(`已旋轉 ${rotatedCount} 個頁面`);
+        } else {
+            if (!hasSelection) showNotification('⚠️ 請先勾選要旋轉的頁面 (左側來源)', 'info');
+        }
+    }
+
+    // --- 快速選取 (Source) ---
+
+    function updateQuickSelectFileOptions() {
+        const qsFileSelect = document.getElementById('qsFileSelect');
+        if (!qsFileSelect) return;
+
+        qsFileSelect.innerHTML = '';
+        if (pdfFiles.length === 0) {
+            const option = document.createElement('option');
+            option.value = "-1"; option.text = "-- 請先載入檔案 --";
+            qsFileSelect.appendChild(option);
+            return;
+        }
+
+        const allOption = document.createElement('option');
+        allOption.value = "-1"; allOption.text = "📂 所有已載入檔案";
+        qsFileSelect.appendChild(allOption);
+
+        pdfFiles.forEach((file, index) => {
+            const option = document.createElement('option');
+            option.value = index;
+            option.text = `📄 ${index + 1}. ${file.name}`;
+            qsFileSelect.appendChild(option);
+        });
+    }
+
+    function applyQuickSelection() {
+        const fileIndexStr = document.getElementById('qsFileSelect').value;
+        const type = document.getElementById('qsTypeSelect').value;
+        const targetFileIndex = parseInt(fileIndexStr); 
+
+        if (pdfFiles.length === 0) {
+            showNotification('請先載入 PDF 檔案', 'error');
+            return;
+        }
+
+        let matchCount = 0;
+        const checkPageLogic = (file, page, pIndex) => {
+            let shouldCheck = false;
+            const pageNum = page.pageNum;
+
+            switch (type) {
+                case 'all': shouldCheck = true; break;
+                case 'odd': shouldCheck = (pageNum % 2 !== 0); break;
+                case 'even': shouldCheck = (pageNum % 2 === 0); break;
+                case 'first': shouldCheck = (pIndex === 0); break;
+                case 'last': shouldCheck = (pIndex === file.pages.length - 1); break;
+                case 'blank': if (page.firstLine === `Page ${pageNum}`) shouldCheck = true; break;
+            }
+
+            if (shouldCheck) {
+                page.isChecked = true;
+                matchCount++;
+            }
+        };
+
+        if (targetFileIndex === -1) {
+            pdfFiles.forEach(file => {
+                file.pages.forEach((page, pIndex) => checkPageLogic(file, page, pIndex));
+            });
+        } else {
+            const file = pdfFiles[targetFileIndex];
+            if (file) {
+                file.pages.forEach((page, pIndex) => checkPageLogic(file, page, pIndex));
+            }
+        }
+
+        if (matchCount > 0) {
+            renderSourcePages();
+            updateSelectedCountInfo();
+            showNotification(`已自動勾選 ${matchCount} 個頁面`, 'success');
+        } else {
+            showNotification('沒有符合條件的頁面', 'info');
+        }
+    }
+
+    function executeQuickSelect() {
+        // 此函式與 applyQuickSelection 類似，但行為是直接加入右側。
+        // 為保持原始功能完整性保留此函式，但建議統一使用 applyQuickSelection + batchAddToTarget
+        const fileIndexStr = document.getElementById('qsFileSelect').value;
+        const type = document.getElementById('qsTypeSelect').value;
+        const targetFileIndex = parseInt(fileIndexStr);
+
+        if (pdfFiles.length === 0) {
+            showNotification('請先載入 PDF 檔案', 'error');
+            return;
+        }
+
+        let addedCount = 0;
+        const processFile = (fIndex) => {
+            const file = pdfFiles[fIndex];
+            if (!file) return;
+
+            file.pages.forEach((page, pIndex) => {
+                let shouldSelect = false;
+                const pageNum = page.pageNum;
+
+                switch (type) {
+                    case 'all': shouldSelect = true; break;
+                    case 'odd': shouldSelect = (pageNum % 2 !== 0); break;
+                    case 'even': shouldSelect = (pageNum % 2 === 0); break;
+                    case 'first': shouldSelect = (pIndex === 0); break;
+                    case 'last': shouldSelect = (pIndex === file.pages.length - 1); break;
+                    case 'blank': if (page.firstLine === `Page ${pageNum}`) shouldSelect = true; break;
+                }
+
+                if (shouldSelect) {
+                    selectedPages.push({ 
+                        type: 'page', 
+                        fileIndex: fIndex, 
+                        pageNum: page.pageNum, 
+                        fileName: file.name, 
+                        canvas: page.canvas, 
+                        firstLine: page.firstLine, 
+                        rotation: 0 
+                    });
+                    addedCount++;
+                }
+            });
+        };
+
+        if (targetFileIndex === -1) {
+            for (let i = 0; i < pdfFiles.length; i++) processFile(i);
+        } else {
+            processFile(targetFileIndex);
+        }
+
+        if (addedCount > 0) {
+            renderSelectedPages();
+            showNotification(`已加入 ${addedCount} 個頁面`, 'success');
+            const container = document.getElementById('selectedPages');
+            container.scrollTop = container.scrollHeight;
+        } else {
+            showNotification('沒有符合條件的頁面', 'info');
+        }
+    }
+
+    function clearAllSourceChecks() {
+        pdfFiles.forEach(file => {
+            file.pages.forEach(page => page.isChecked = false);
+        });
+        document.getElementById('selectAllSource').checked = false;
         renderSourcePages();
         updateSelectedCountInfo();
     }
-    
-    function getPageByGlobalIndex(globalIndex) {
-        let count = 0;
-        for (let fileIndex = 0; fileIndex < pdfFiles.length; fileIndex++) {
-             if (pdfFiles[fileIndex]) {
-                 const file = pdfFiles[fileIndex];
-                 if (globalIndex < count + file.pages.length) {
-                    return { fileIndex, pageIndex: globalIndex - count };
-                 }
-                count += file.pages.length;
-            }
+
+    // ======================================================
+    // === 邏輯區塊：右側成品面板 (Target Panel)
+    // ======================================================
+
+    function setTargetViewMode(mode) {
+        targetViewMode = mode;
+        document.getElementById('targetGridViewBtn').classList.toggle('active', mode === 'grid');
+        document.getElementById('targetListViewBtn').classList.toggle('active', mode === 'list');
+        renderSelectedPages();
+    }
+
+    function setTargetThumbnailSize(size) {
+        targetThumbnailSize = size;
+        const container = document.getElementById('targetPanel');
+        container.classList.remove('size-small', 'size-medium', 'size-large');
+        container.classList.add(`size-${size}`);
+        
+        document.querySelectorAll('#target-size-toggle button').forEach(btn => btn.classList.remove('active'));
+        document.querySelector(`#target-size-toggle button[onclick="setTargetThumbnailSize('${size}')"]`).classList.add('active');
+    }
+
+    function renderSelectedPages() {
+        if (selectedPages.length === 0) {
+            selectedPagesContainer.innerHTML = '<div class="empty-message">尚未選擇任何頁面</div>';
+            updateTargetSelectedInfo();
+            return;
         }
-        return null;
+
+        selectedPagesContainer.className = `selected-pages ${targetViewMode}-view`;
+
+        selectedPagesContainer.innerHTML = selectedPages.map((item, index) => {
+             if (!item) return '';
+             
+             // 分隔線
+             if (item.type === 'divider') {
+                return `
+                    <div class="selected-divider-item" draggable="true" data-index="${index}">
+                        <span class="drag-handle">::</span>
+                         <div class="selected-divider-title">${item.firstLine || 'New Section'}</div> 
+                        <div class="page-actions">
+                            <button class="btn btn-danger" onclick="removeSelectedPage(${index})">✕</button>
+                        </div>
+                    </div>`;
+            }
+
+            // 一般頁面
+            const title = item.firstLine || `Page ${item.pageNum || '?'}`;
+            const source = `${item.fileName || 'Unknown File'} - 第 ${item.pageNum || '?'} 頁`;
+            const checkedAttr = item.isChecked ? 'checked' : '';
+            const checkedClass = item.isChecked ? 'checked' : '';
+            const rotationStyle = `transform: rotate(${item.rotation || 0}deg);`;
+            const clickAction = `onclick="toggleTargetCheck(${index})"`;
+
+            if (targetViewMode === 'grid') {
+                return `
+                <div class="selected-page-item grid-item ${checkedClass}" draggable="true" data-index="${index}" ${clickAction}>
+                    <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleTargetCheck(${index})">
+                    <div class="canvas-wrapper">
+                        <canvas id="selected_${index}" style="${rotationStyle}"></canvas>
+                    </div>
+                    <div class="page-info-grid">
+                        <div class="page-num-badge">${index + 1}</div>
+                        <div class="page-title-grid" title="${title}">${title}</div>
+                    </div>
+                </div>`;
+            } else {
+                return `
+                <div class="selected-page-item list-item ${checkedClass}" draggable="true" data-index="${index}" ${clickAction}>
+                    <span class="drag-handle">::</span>
+                    <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleTargetCheck(${index})">
+                    <div class="list-thumb-wrapper">
+                        <canvas id="selected_${index}" style="${rotationStyle}"></canvas>
+                    </div>
+                    <div class="selected-page-info">
+                        <div class="selected-page-title">${index + 1}. ${title}</div>
+                        <div class="selected-page-source">${source}</div>
+                    </div>
+                </div>`;
+            }
+        }).join('');
+
+        // 繪製右側 Canvas
+        selectedPages.forEach((item, index) => {
+             if (item && item.type !== 'divider') {
+                 const canvas = document.getElementById(`selected_${index}`);
+                 if (canvas && item.canvas) {
+                    canvas.width = item.canvas.width;
+                    canvas.height = item.canvas.height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(item.canvas, 0, 0);
+                 }
+             }
+        });
+
+        setupDragAndDrop();
+        updateTargetSelectedInfo();
+    }
+
+    function toggleTargetCheck(index) {
+        if (!selectedPages[index]) return;
+        if (selectedPages[index].isChecked === undefined) selectedPages[index].isChecked = false;
+        selectedPages[index].isChecked = !selectedPages[index].isChecked;
+        renderSelectedPages();
+    }
+
+    function toggleSelectAllTarget(checkbox) {
+        const checked = checkbox.checked;
+        selectedPages.forEach(p => {
+            if (p.type !== 'divider') p.isChecked = checked;
+        });
+        renderSelectedPages();
+    }
+
+    // --- 批次操作 (Target) ---
+
+    function batchDeleteFromTarget() {
+        const initialLen = selectedPages.length;
+        selectedPages = selectedPages.filter(p => !p.isChecked); 
+        
+        const deletedCount = initialLen - selectedPages.length;
+        if (deletedCount > 0) {
+            renderSelectedPages();
+            document.getElementById('selectAllTarget').checked = false;
+            showNotification(`已從右側移除 ${deletedCount} 頁`, 'success');
+        } else {
+            showNotification('請先勾選右側頁面', 'info');
+        }
+    }
+
+    function batchRotateTarget(deg) {
+        let count = 0;
+        selectedPages.forEach(p => {
+            if (p.isChecked && p.type !== 'divider') {
+                const current = p.rotation || 0;
+                p.rotation = (current + deg + 360) % 360;
+                count++;
+            }
+        });
+        if (count > 0) {
+            renderSelectedPages();
+        } else {
+            showNotification('請先勾選右側頁面', 'info');
+        }
+    }
+
+    function removeSelectedPage(index) {
+        selectedPages.splice(index, 1);
+        renderSourcePages();
+        renderSelectedPages();
+    }
+
+    function rotateSelectedPage(index) {
+        if (!selectedPages[index] || selectedPages[index].type === 'divider') return;
+        let currentRotation = selectedPages[index].rotation || 0;
+        let newRotation = (currentRotation + 90) % 360;
+        selectedPages[index].rotation = newRotation;
+        renderSelectedPages();
+    }
+
+    function applyTargetQuickSelection() {
+        const type = document.getElementById('qsTargetTypeSelect').value;
+        let count = 0;
+        let pageIndexCounter = 0;
+
+        selectedPages.forEach((item) => {
+            if (item.type === 'divider') return;
+            const currentPos = pageIndexCounter + 1; 
+            let shouldCheck = false;
+
+            switch (type) {
+                case 'all': shouldCheck = true; break;
+                case 'odd': shouldCheck = (currentPos % 2 !== 0); break;
+                case 'even': shouldCheck = (currentPos % 2 === 0); break;
+                case 'first': shouldCheck = (pageIndexCounter === 0); break;
+                case 'last': 
+                    const totalPages = selectedPages.filter(p => p.type !== 'divider').length;
+                    shouldCheck = (pageIndexCounter === totalPages - 1); 
+                    break;
+                case 'blank':
+                    if (item.firstLine && item.firstLine.startsWith('Page ')) shouldCheck = true;
+                    break;
+            }
+
+            if (shouldCheck) {
+                item.isChecked = true;
+                count++;
+            }
+            pageIndexCounter++;
+        });
+
+        renderSelectedPages();
+        showNotification(`已勾選右側 ${count} 個頁面`, 'success');
     }
 
     function clearSelectedPages() {
@@ -522,319 +1041,16 @@ window.onload = function() {
         }
     }
 
-    function renderSourcePages() {
-        if (pdfFiles.length === 0) {
-            sourcePages.innerHTML = '<div class="empty-message">尚未載入任何 PDF 檔案</div>';
-            return;
-        }
-        sourcePages.innerHTML = pdfFiles.map((file, fileIndex) => {
-             if (!file) return '';
-             const pagesHtml = viewMode === 'grid' 
-                ? `<div class="pages-grid">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'grid')).join('')}</div>`
-                : `<div class="pages-list">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'list')).join('')}</div>`;
-             return `<div class="pdf-file"><div class="pdf-file-header"><div class="pdf-file-name">${file.name || 'Unknown File'}</div></div>${pagesHtml}</div>`;
-        }).join('');
-
-        pdfFiles.forEach((file, fileIndex) => {
-             if (file) {
-                 file.pages.forEach((page, pageIndex) => {
-                     const canvas = document.getElementById(`source_${fileIndex}_${pageIndex}`);
-                     if (canvas && page.canvas) {
-                         const ctx = canvas.getContext('2d');
-                         if (page.canvas.width > 0 && page.canvas.height > 0) {
-                             canvas.width = page.canvas.width;
-                             canvas.height = page.canvas.height;
-                             ctx.drawImage(page.canvas, 0, 0);
-                         } else {
-                             console.warn(`Invalid canvas dimensions for source_${fileIndex}_${pageIndex}`);
-                         }
-                     }
-                 });
-             }
-        });
-    }
-
-
-    function renderPageItem(fileIndex, pageIndex, type) {
-        if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return '';
-        const page = pdfFiles[fileIndex].pages[pageIndex];
-        
-        const checkedAttr = page.isChecked ? 'checked' : '';
-        const checkedClass = page.isChecked ? 'checked' : '';
-        const currentRotation = page.sourceRotation || 0; 
-        const rotationStyle = `transform: rotate(${currentRotation}deg); transition: transform 0.3s;`;
-        
-        // ★★★ 修改處：在 onclick 中加入 event 參數 ★★★
-        const clickAction = `onclick="toggleSourceCheck(${fileIndex}, ${pageIndex}, event)"`;
-        // Checkbox 也要加 event，並阻止冒泡
-        const checkboxAction = `onclick="event.stopPropagation(); toggleSourceCheck(${fileIndex}, ${pageIndex}, event)"`;
-
-        if (type === 'grid') {
-            return `
-                <div class="page-item ${checkedClass}" ${clickAction}>
-                    <input type="checkbox" class="page-checkbox" ${checkedAttr} ${checkboxAction}>
-                    <div style="overflow:hidden; display:flex; justify-content:center; align-items:center; height: 100%; width: 100%;">
-                        <canvas id="source_${fileIndex}_${pageIndex}" style="${rotationStyle}"></canvas>
-                    </div>
-                    <div class="page-number">第 ${page.pageNum} 頁</div> 
-                </div>`;
-        } else {
-             const title = page.firstLine || `Page ${page.pageNum}`;
-            return `
-                <div class="page-list-item ${checkedClass}" ${clickAction} title="${title}">
-                    <input type="checkbox" class="page-checkbox" ${checkedAttr} ${checkboxAction}>
-                    <div style="width: 30px; display: flex; justify-content: center;">
-                        <canvas id="source_${fileIndex}_${pageIndex}" style="width: 100%; ${rotationStyle}"></canvas>
-                    </div>
-                    <div class="page-list-text">${title}</div>
-                    <div class="page-list-number">第 ${page.pageNum} 頁</div>
-                </div>`;
-        }
-    }
-
-
-// ==========================================
-    // === 右側 (Target) 面板功能函式
-    // ==========================================
-
-    function setTargetViewMode(mode) {
-        targetViewMode = mode;
-        document.getElementById('targetGridViewBtn').classList.toggle('active', mode === 'grid');
-        document.getElementById('targetListViewBtn').classList.toggle('active', mode === 'list');
-        renderSelectedPages();
-    }
-
-    function setTargetThumbnailSize(size) {
-        targetThumbnailSize = size;
-        const container = document.getElementById('targetPanel');
-        // 移除舊的 size class
-        container.classList.remove('size-small', 'size-medium', 'size-large');
-        container.classList.add(`size-${size}`);
-        
-        // 更新按鈕狀態
-        document.querySelectorAll('#target-size-toggle button').forEach(btn => btn.classList.remove('active'));
-        document.querySelector(`#target-size-toggle button[onclick="setTargetThumbnailSize('${size}')"]`).classList.add('active');
-    }
-
-    // ★★★ 重寫 renderSelectedPages 以支援 Grid/List 與 Checkbox ★★★
-    function renderSelectedPages() {
-        if (selectedPages.length === 0) {
-            selectedPagesContainer.innerHTML = '<div class="empty-message">尚未選擇任何頁面</div>';
-            updateTargetSelectedInfo();
-            return;
-        }
-
-        // 根據 ViewMode 設定容器 class
-        selectedPagesContainer.className = `selected-pages ${targetViewMode}-view`;
-
-        selectedPagesContainer.innerHTML = selectedPages.map((item, index) => {
-             if (!item) return '';
-             
-             // 如果是分隔線 (Section Divider)
-             if (item.type === 'divider') {
-                return `
-                    <div class="selected-divider-item" draggable="true" data-index="${index}">
-                        <span class="drag-handle">::</span>
-                         <div class="selected-divider-title">${item.firstLine || 'New Section'}</div> 
-                        <div class="page-actions">
-                            <button class="btn btn-danger" onclick="removeSelectedPage(${index})">✕</button>
-                        </div>
-                    </div>
-                `;
-            }
-
-            // 一般頁面
-            const title = item.firstLine || `Page ${item.pageNum || '?'}`;
-            const source = `${item.fileName || 'Unknown File'} - 第 ${item.pageNum || '?'} 頁`;
-            const checkedAttr = item.isChecked ? 'checked' : '';
-            const checkedClass = item.isChecked ? 'checked' : '';
-            const rotationStyle = `transform: rotate(${item.rotation || 0}deg);`;
-            
-            // 點擊事件：切換勾選
-            const clickAction = `onclick="toggleTargetCheck(${index})"`;
-
-            if (targetViewMode === 'grid') {
-                return `
-                <div class="selected-page-item grid-item ${checkedClass}" draggable="true" data-index="${index}" ${clickAction}>
-                    <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleTargetCheck(${index})">
-                    <div class="canvas-wrapper">
-                        <canvas id="selected_${index}" style="${rotationStyle}"></canvas>
-                    </div>
-                    <div class="page-info-grid">
-                        <div class="page-num-badge">${index + 1}</div>
-                        <div class="page-title-grid" title="${title}">${title}</div>
-                    </div>
-                </div>`;
-            } else {
-                // List View
-                return `
-                <div class="selected-page-item list-item ${checkedClass}" draggable="true" data-index="${index}" ${clickAction}>
-                    <span class="drag-handle">::</span>
-                    <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleTargetCheck(${index})">
-                    <div class="list-thumb-wrapper">
-                        <canvas id="selected_${index}" style="${rotationStyle}"></canvas>
-                    </div>
-                    <div class="selected-page-info">
-                        <div class="selected-page-title">${index + 1}. ${title}</div>
-                        <div class="selected-page-source">${source}</div>
-                    </div>
-                </div>
-                `;
-            }
-        }).join('');
-
-        // 繪製 Canvas (邏輯與之前類似，但要注意縮圖大小)
-        selectedPages.forEach((item, index) => {
-             if (item && item.type !== 'divider') {
-                 const canvas = document.getElementById(`selected_${index}`);
-                 if (canvas && item.canvas) {
-                    // 這裡只負責繪製內容，旋轉由 CSS transform 處理
-                    // 為了效能，縮圖可以畫小一點，但這裡為了清晰度維持原比例
-                    canvas.width = item.canvas.width;
-                    canvas.height = item.canvas.height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(item.canvas, 0, 0);
-                 }
-             }
-        });
-
-        setupDragAndDrop(); // 重新綁定拖曳事件
-        updateTargetSelectedInfo(); // 更新已選數量
-    }
-
-    // 1. 單選切換
-    function toggleTargetCheck(index) {
-        if (!selectedPages[index]) return;
-        // 如果該物件沒有 isChecked 屬性，先初始化
-        if (selectedPages[index].isChecked === undefined) selectedPages[index].isChecked = false;
-        
-        selectedPages[index].isChecked = !selectedPages[index].isChecked;
-        renderSelectedPages();
-    }
-
-    // 2. 全選切換
-    function toggleSelectAllTarget(checkbox) {
-        const checked = checkbox.checked;
-        selectedPages.forEach(p => {
-            if (p.type !== 'divider') p.isChecked = checked;
-        });
-        renderSelectedPages();
-    }
-
-    // 3. 智慧勾選邏輯
-    function applyTargetQuickSelection() {
-        const type = document.getElementById('qsTargetTypeSelect').value;
-        let count = 0;
-        
-        // 過濾掉分隔線，只計算實際頁面的索引位置
-        // 注意：這裡的 "奇數/偶數" 是指「在成品PDF中的順序」，不是原始頁碼
-        let pageIndexCounter = 0;
-
-        selectedPages.forEach((item) => {
-            if (item.type === 'divider') return;
-            
-            // pageIndexCounter 從 0 開始 (代表成品第1頁)
-            const currentPos = pageIndexCounter + 1; 
-            let shouldCheck = false;
-
-            switch (type) {
-                case 'all': shouldCheck = true; break;
-                case 'odd': shouldCheck = (currentPos % 2 !== 0); break;
-                case 'even': shouldCheck = (currentPos % 2 === 0); break;
-                case 'first': shouldCheck = (pageIndexCounter === 0); break;
-                case 'last': 
-                    // 這裡需要計算總頁數 (不含divider)
-                    const totalPages = selectedPages.filter(p => p.type !== 'divider').length;
-                    shouldCheck = (pageIndexCounter === totalPages - 1); 
-                    break;
-                case 'blank':
-                    // 檢查原始標題是否為預設值
-                    if (item.firstLine && item.firstLine.startsWith('Page ')) shouldCheck = true;
-                    break;
-            }
-
-            if (shouldCheck) {
-                item.isChecked = true;
-                count++;
-            }
-            pageIndexCounter++;
-        });
-
-        renderSelectedPages();
-        showNotification(`已勾選右側 ${count} 個頁面`, 'success');
-    }
-
-    // 4. 批次刪除
-    function batchDeleteFromTarget() {
-        const initialLen = selectedPages.length;
-        selectedPages = selectedPages.filter(p => !p.isChecked); // 只保留沒被勾選的
-        
-        const deletedCount = initialLen - selectedPages.length;
-        if (deletedCount > 0) {
-            renderSelectedPages();
-            document.getElementById('selectAllTarget').checked = false;
-            showNotification(`已從右側移除 ${deletedCount} 頁`, 'success');
-        } else {
-            showNotification('請先勾選右側頁面', 'info');
-        }
-    }
-
-    // 5. 批次旋轉
-    function batchRotateTarget(deg) {
-        let count = 0;
-        selectedPages.forEach(p => {
-            if (p.isChecked && p.type !== 'divider') {
-                const current = p.rotation || 0;
-                p.rotation = (current + deg + 360) % 360;
-                count++;
-            }
-        });
-        if (count > 0) {
-            renderSelectedPages();
-        } else {
-            showNotification('請先勾選右側頁面', 'info');
-        }
-    }
-
-    function updateTargetSelectedInfo() {
-        const count = selectedPages.filter(p => p.isChecked).length;
-        const el = document.getElementById('targetSelectedCountInfo');
-        if(el) el.textContent = `(${count})`;
-    }
-
-
-    function removeSelectedPage(index) {
-        selectedPages.splice(index, 1);
-        renderSourcePages();
-        renderSelectedPages();
-    }
-
-    // ==========================================================
-    // === 新函式：旋轉已選頁面
-    // ==========================================================
-    function rotateSelectedPage(index) {
-        if (!selectedPages[index] || selectedPages[index].type === 'divider') {
-            return;
-        }
-        
-        // 旋轉角度： 0 -> 90 -> 180 -> 270 -> 0
-        let currentRotation = selectedPages[index].rotation || 0;
-        let newRotation = (currentRotation + 90) % 360;
-        selectedPages[index].rotation = newRotation;
-        
-        // 重新渲染右側列表
-        renderSelectedPages();
-    }
-
+    // ======================================================
+    // === 邏輯區塊：拖曳排序 (Drag & Drop)
+    // ======================================================
 
     function setupDragAndDrop() {
         document.querySelectorAll('.selected-page-item, .selected-divider-item').forEach(item => {
             item.addEventListener('dragstart', (e) => {
                 draggedElement = item;
                 item.classList.add('dragging');
-                if (e.dataTransfer) {
-                    e.dataTransfer.effectAllowed = 'move';
-                }
+                if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
             });
             item.addEventListener('dragend', () => {
                  if(draggedElement) draggedElement.classList.remove('dragging');
@@ -866,11 +1082,10 @@ window.onload = function() {
                  const fromIndexAttr = draggedElement.getAttribute('data-index');
                  if (fromIndexAttr === null) {
                     console.error("Dragged element missing data-index attribute.");
-                     renderSelectedPages(); // Attempt to restore visual state
+                     renderSelectedPages(); 
                     return;
                  }
                  const fromIndex = parseInt(fromIndexAttr, 10);
-
                  const currentChildren = Array.from(selectedPagesContainer.children);
                  const toIndex = currentChildren.indexOf(draggedElement);
 
@@ -890,7 +1105,7 @@ window.onload = function() {
                            return;
                        }
                  }
-                renderSelectedPages(); // Always re-render
+                renderSelectedPages();
             });
         });
     }
@@ -904,7 +1119,7 @@ window.onload = function() {
             const box = child.getBoundingClientRect();
             const midpoint = box.top + box.height / 2;
             const offset = y - midpoint;
-            if (offset > 0 && offset < closest.offset) { // Find closest element *below* cursor
+            if (offset > 0 && offset < closest.offset) { 
                 return { offset: offset, element: child };
             } else {
                 return closest;
@@ -912,6 +1127,9 @@ window.onload = function() {
          }, { offset: Number.POSITIVE_INFINITY }).element;
     }
 
+    // ======================================================
+    // === 邏輯區塊：目錄編輯 (TOC Editor)
+    // ======================================================
 
     function openTocEditor() {
         const pageItems = selectedPages.filter(p => p && p.type !== 'divider');
@@ -945,11 +1163,7 @@ window.onload = function() {
         renderSelectedPages();
         closeTocEditor();
     }
-    
-    // 4. 在函式定義區加入重設函式：
-    // ==========================================================
-    // === 重設目錄設定為預設值
-    // ==========================================================
+
     function resetTocSettings() {
         document.getElementById('tocMainTitleSize').value = 20;
         document.getElementById('tocSectionSize').value = 14;
@@ -959,11 +1173,10 @@ window.onload = function() {
         showNotification('✅ 已重設為預設值', 'success');
     }
 
-    // ==========================================================
-    // === 新函式：處理預覽和下載
-    // ==========================================================
+    // ======================================================
+    // === 邏輯區塊：PDF 生成與下載 (Generation)
+    // ======================================================
 
-    // --- 負責「觸發下載」的函式 (從 generatePDF 搬移過來)
     function downloadGeneratedPDF() {
         if (!finalPdfBytes) {
             showNotification("沒有可下載的 PDF 檔案。", 'error');
@@ -971,7 +1184,7 @@ window.onload = function() {
         }
 
         const blob = new Blob([finalPdfBytes], { type: 'application/pdf' });
-        const url = URL.createObjectURL(blob); // 建立一個新的 URL
+        const url = URL.createObjectURL(blob); 
         const a = document.createElement('a');
         a.href = url;
         a.style.display = 'none';
@@ -980,9 +1193,8 @@ window.onload = function() {
         let finalFileName = prompt("請確認檔案名稱：", defaultFileName);
 
         if (finalFileName === null) {
-            // 使用者取消下載
-            URL.revokeObjectURL(url); // 釋放這個下載 URL
-            return; // 保持預覽開啟
+            URL.revokeObjectURL(url); 
+            return; 
         }
         if (finalFileName.trim() === "") {
             finalFileName = defaultFileName;
@@ -995,34 +1207,27 @@ window.onload = function() {
         setTimeout(() => {
             try {
                 document.body.removeChild(a);
-                URL.revokeObjectURL(url); // 釋放下載 URL
+                URL.revokeObjectURL(url); 
             } catch (cleanupError) { console.error("Error during cleanup:", cleanupError); }
         }, 100);
         
-        // 下載完畢，關閉預覽
         closePreview();
     }
 
-    // --- 負責「關閉預覽」的函式
     function closePreview() {
         const modal = document.getElementById('previewModal');
         const iframe = document.getElementById('previewFrame');
         
         modal.style.display = 'none';
-        iframe.src = 'about:blank'; // 清空 iframe
+        iframe.src = 'about:blank'; 
 
-        // 釋放預覽 URL 的記憶體
         if (currentPreviewUrl) {
             URL.revokeObjectURL(currentPreviewUrl);
             currentPreviewUrl = null;
         }
-        finalPdfBytes = null; // 清空
+        finalPdfBytes = null; 
     }
 
-    // 5. 完整的 generatePDF 函式（替換整個函式）
-    // ==========================================================
-    // === generatePDF - 完整版本（含使用者可調整字型設定）
-    // ==========================================================
     async function generatePDF() {
         if (typeof PDFLib === 'undefined' || typeof PDFLib.PDFDocument === 'undefined') {
             console.error("PDFLib not available in generatePDF");
@@ -1048,7 +1253,7 @@ window.onload = function() {
             const newPdf = await PDFDocument.create();
             let customFont;
             
-            // --- 優化：建立 PDF-Lib 文件快取 ---
+            // 建立 PDF-Lib 文件快取
             const pdfLibDocCache = new Map();
 
             try {
@@ -1059,9 +1264,7 @@ window.onload = function() {
                     return res.arrayBuffer();
                 });
                 
-                if (typeof fontkit === 'undefined') {
-                    throw new Error("fontkit 函式庫載入失敗");
-                }
+                if (typeof fontkit === 'undefined') throw new Error("fontkit 函式庫載入失敗");
                 newPdf.registerFontkit(fontkit); 
                 customFont = await newPdf.embedFont(fontBytes);
                 progress.textContent = '中文字型載入成功!';
@@ -1081,18 +1284,15 @@ window.onload = function() {
             }
             
             const addToc = addTocCheckbox.checked;
-            
-            // ▼▼▼ 讀取新增頁碼的選項 ▼▼▼
             const addPageNumbers = document.getElementById('addPageNumbersCheckbox').checked;
-            // ▲▲▲ 讀取新增頁碼的選項 ▲▲▲
             
-            let tocPages = []; // 追蹤所有目錄頁
-            let tocLinkData = []; // 儲存目錄項目的位置資訊（用於後續建立超連結）
+            let tocPages = []; 
+            let tocLinkData = []; 
 
+            // --- 建立目錄頁 (TOC) ---
             if (addToc) {
                 progress.textContent = '正在建立目錄頁...';
                 
-                // === 讀取使用者設定的字型大小 ===
                 const TOC_CONFIG = {
                     MAIN_TITLE_SIZE: parseInt(document.getElementById('tocMainTitleSize').value) || 20,
                     SECTION_TITLE_SIZE: parseInt(document.getElementById('tocSectionSize').value) || 14,
@@ -1104,13 +1304,9 @@ window.onload = function() {
                 let tocPage = newPdf.addPage([842, 595]); // 橫向A4
                 tocPages.push(tocPage);
                 
-                // 使用使用者設定的大小繪製主標題
                 tocPage.drawText('目錄', { 
-                    x: 50, 
-                    y: 595 - 50, 
-                    size: TOC_CONFIG.MAIN_TITLE_SIZE,
-                    font: customFont, 
-                    color: rgb(0,0,0) 
+                    x: 50, y: 595 - 50, 
+                    size: TOC_CONFIG.MAIN_TITLE_SIZE, font: customFont, color: rgb(0,0,0) 
                 });
                 
                 let yPosition = 595 - 90;
@@ -1119,28 +1315,22 @@ window.onload = function() {
                 for (const item of selectedPages) {
                     if (!item) continue;
                     
-                    // --- TOC 頁面溢出處理 ---
+                    // TOC 換頁處理
                     if (yPosition < 50) {
                         tocPage = newPdf.addPage([842, 595]);
                         tocPages.push(tocPage);
                         yPosition = 595 - 90;
                         tocPage.drawText('目錄 (續)', { 
-                            x: 50, 
-                            y: 595 - 50, 
-                            size: TOC_CONFIG.MAIN_TITLE_SIZE,
-                            font: customFont, 
-                            color: rgb(0,0,0) 
+                            x: 50, y: 595 - 50, 
+                            size: TOC_CONFIG.MAIN_TITLE_SIZE, font: customFont, color: rgb(0,0,0) 
                         });
                     }
 
                     if (item.type === 'divider') {
                         yPosition -= 10;
                         tocPage.drawText(item.firstLine || 'New Section', { 
-                            x: 50, 
-                            y: yPosition, 
-                            size: TOC_CONFIG.SECTION_TITLE_SIZE,
-                            font: customFont, 
-                            color: rgb(0,0,0) 
+                            x: 50, y: yPosition, 
+                            size: TOC_CONFIG.SECTION_TITLE_SIZE, font: customFont, color: rgb(0,0,0) 
                         });
                         yPosition -= 25;
                     } else {
@@ -1153,58 +1343,34 @@ window.onload = function() {
                         const pageContentWidth = tocPage.getWidth() - leftMargin - rightMargin;
                         
                         let pageNumWidth = 0;
-                        let titleWidth = 0;
-                        
-                        // 使用設定的字型大小計算寬度
-                        try { 
-                            pageNumWidth = customFont.widthOfTextAtSize(pageNumStr, TOC_CONFIG.ITEM_PAGENUM_SIZE); 
-                        } catch (e) { 
-                            console.error("Err getting pageNum width:", e); 
-                        }
+                        try { pageNumWidth = customFont.widthOfTextAtSize(pageNumStr, TOC_CONFIG.ITEM_PAGENUM_SIZE); } catch (e) {}
                         
                         let truncatedTitle = title;
-                        try { 
-                            titleWidth = customFont.widthOfTextAtSize(truncatedTitle, TOC_CONFIG.ITEM_TITLE_SIZE); 
-                        } catch (e) { 
-                            console.error("Err getting title width:", e); 
-                        }
+                        let titleWidth = 0;
+                        try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, TOC_CONFIG.ITEM_TITLE_SIZE); } catch (e) {}
                         
                         const minDotSpace = 20;
                         while (titleWidth > 0 && pageContentWidth > 0 && (titleWidth + pageNumWidth + minDotSpace > pageContentWidth) && truncatedTitle.length > 5) {
                             truncatedTitle = truncatedTitle.slice(0, -2) + '…';
-                            try { 
-                                titleWidth = customFont.widthOfTextAtSize(truncatedTitle, TOC_CONFIG.ITEM_TITLE_SIZE); 
-                            } catch (e) { 
-                                titleWidth = 0; 
-                            }
+                            try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, TOC_CONFIG.ITEM_TITLE_SIZE); } catch (e) { titleWidth = 0; }
                         }
                         
-                        // === 繪製標題（使用使用者設定）===
+                        // 繪製標題
                         tocPage.drawText(truncatedTitle, { 
-                            x: leftMargin, 
-                            y: yPosition, 
-                            size: TOC_CONFIG.ITEM_TITLE_SIZE,
-                            font: customFont, 
-                            color: rgb(0, 0, 0) // 目錄的顏色
+                            x: leftMargin, y: yPosition, 
+                            size: TOC_CONFIG.ITEM_TITLE_SIZE, font: customFont, color: rgb(0, 0, 0)
                         });
                         
-                        // === 繪製頁碼（使用使用者設定）===
+                        // 繪製頁碼
                         tocPage.drawText(pageNumStr, { 
-                            x: tocPage.getWidth() - rightMargin - pageNumWidth, 
-                            y: yPosition, 
-                            size: TOC_CONFIG.ITEM_PAGENUM_SIZE,
-                            font: customFont, 
-                            color: rgb(0, 0, 0) 
+                            x: tocPage.getWidth() - rightMargin - pageNumWidth, y: yPosition, 
+                            size: TOC_CONFIG.ITEM_PAGENUM_SIZE, font: customFont, color: rgb(0, 0, 0) 
                         });
                         
-                        // === 繪製點點 ===
+                        // 繪製點點
                         let dotWidth = 0;
                         const dotSize = Math.min(TOC_CONFIG.ITEM_TITLE_SIZE, TOC_CONFIG.ITEM_PAGENUM_SIZE);
-                        try { 
-                            dotWidth = customFont.widthOfTextAtSize('.', dotSize); 
-                        } catch (e) { 
-                            console.error("Err getting dot width:", e); 
-                        }
+                        try { dotWidth = customFont.widthOfTextAtSize('.', dotSize); } catch (e) {}
                         
                         if (dotWidth > 0) {
                             const dotStartX = leftMargin + titleWidth + 5;
@@ -1214,17 +1380,13 @@ window.onload = function() {
                                 const numDots = Math.floor(availableDotSpace / dotWidth);
                                 const dotString = '.'.repeat(numDots);
                                 tocPage.drawText(dotString, { 
-                                    x: dotStartX, 
-                                    y: yPosition, 
-                                    size: dotSize,
-                                    font: customFont, 
-                                    color: rgb(0, 0, 0), 
-                                    opacity: 0.5 
+                                    x: dotStartX, y: yPosition, 
+                                    size: dotSize, font: customFont, color: rgb(0, 0, 0), opacity: 0.5 
                                 });
                             }
                         }
                         
-                        // === 儲存連結資訊（稍後建立）===
+                        // 儲存連結資訊
                         tocLinkData.push({
                             tocPage: tocPage,
                             targetContentPageIndex: pageCounterForToc - 1,
@@ -1236,15 +1398,14 @@ window.onload = function() {
                             }
                         });
                         
-                        // 使用使用者設定的行距
                         yPosition -= TOC_CONFIG.LINE_HEIGHT;
                     }
                 }
             }
             
-            // === 開始合併內容頁 ===
+            // --- 合併內容頁 ---
             let pageCounterForContent = 0;
-            const pageOffset = tocPages.length; // 目錄頁數作為頁碼偏移
+            const pageOffset = tocPages.length;
 
             for (const item of selectedPages) {
                 if (!item || item.type === 'divider') continue;
@@ -1259,7 +1420,6 @@ window.onload = function() {
                 const sourceFile = pdfFiles[item.fileIndex];
                 
                 try {
-                    // --- 優化：使用快取載入 PDF ---
                     let sourcePdf;
                     if (pdfLibDocCache.has(item.fileIndex)) {
                         sourcePdf = pdfLibDocCache.get(item.fileIndex);
@@ -1276,31 +1436,23 @@ window.onload = function() {
                     
                     const [copiedPage] = await newPdf.copyPages(sourcePdf, [item.pageNum - 1]);
 
-                    // --- 套用旋轉 ---
                     if (item.rotation && item.rotation !== 0) {
                         copiedPage.rotate(item.rotation);
                     }
                     
                     newPdf.addPage(copiedPage);
                     
-                    // ▼▼▼ 加上新的頁碼 (如果使用者有勾選) ▼▼▼
+                    // 新增頁碼
                     if (addPageNumbers) {
                         const newPageNumber = `${pageCounterForContent + pageOffset}`;
                         const { width, height } = copiedPage.getSize();
-                        
                         if (width > 0 && height > 0) {
                             copiedPage.drawText(newPageNumber, { 
-                                x: width - 40, 
-                                y: 30, 
-                                size: 10, 
-                                font: customFont, 
-                                color: rgb(0, 0, 0) 
+                                x: width - 40, y: 30, 
+                                size: 10, font: customFont, color: rgb(0, 0, 0) 
                             });
-                        } else { 
-                            console.warn(`Invalid dimensions page ${pageCounterForContent}`); 
                         }
                     }
-                    // ▲▲▲ 頁碼邏輯結束 ▲▲▲
                     
                 } catch(loadError) {
                     console.error(`Error loading/copying page ${item.pageNum} from ${sourceFile.name}:`, loadError);
@@ -1308,60 +1460,38 @@ window.onload = function() {
                 }
             }
 
-            // === 在所有頁面建立完成後，建立目錄超連結 ===
+            // --- 建立目錄超連結 ---
             if (addToc && tocLinkData.length > 0) {
                 progress.textContent = '正在建立目錄超連結...';
-                
                 const allPages = newPdf.getPages();
                 
                 for (let i = 0; i < tocLinkData.length; i++) {
                     const linkInfo = tocLinkData[i];
                     const targetPageIndex = tocPages.length + linkInfo.targetContentPageIndex;
                     
-                    if (targetPageIndex >= allPages.length) {
-                        console.warn(`目標頁面索引 ${targetPageIndex} 超出範圍`);
-                        continue;
-                    }
+                    if (targetPageIndex >= allPages.length) continue;
                     
                     const targetPage = allPages[targetPageIndex];
-                    
                     try {
-                        // 建立 Link Annotation
                         const linkAnnot = linkInfo.tocPage.doc.context.obj({
-                            Type: 'Annot',
-                            Subtype: 'Link',
+                            Type: 'Annot', Subtype: 'Link',
                             Rect: [
-                                linkInfo.linkRect.x,
-                                linkInfo.linkRect.y,
+                                linkInfo.linkRect.x, linkInfo.linkRect.y,
                                 linkInfo.linkRect.x + linkInfo.linkRect.width,
                                 linkInfo.linkRect.y + linkInfo.linkRect.height
                             ],
-                            Border: [0, 0, 0],
-                            C: [0, 0, 1],
-                            A: {
-                                S: 'GoTo',
-                                D: [targetPage.ref, 'Fit']
-                            }
+                            Border: [0, 0, 0], C: [0, 0, 1],
+                            A: { S: 'GoTo', D: [targetPage.ref, 'Fit'] }
                         });
-                        
-                        // 將 annotation 註冊並加到目錄頁
                         const registeredAnnot = linkInfo.tocPage.doc.context.register(linkAnnot);
-                        
-                        // 取得或建立 Annots 陣列
                         let annots = linkInfo.tocPage.node.lookup(PDFName.of('Annots'));
-                        
                         if (!annots) {
                             annots = linkInfo.tocPage.doc.context.obj([]);
                             linkInfo.tocPage.node.set(PDFName.of('Annots'), annots);
                         }
-                        
-                        // 將連結加入陣列
                         if (annots instanceof PDFArray || Array.isArray(annots.array)) {
                             annots.push(registeredAnnot);
-                        } else {
-                            console.warn('Annots is not an array, cannot add link');
                         }
-                        
                     } catch (linkError) {
                         console.error(`無法建立超連結 (項目 ${i + 1}):`, linkError);
                     }
@@ -1370,10 +1500,7 @@ window.onload = function() {
 
             progress.textContent = '正在儲存 PDF...';
             
-            // 使用 pdf-lib 生成 PDF 的 bytes
             let pdfBytes = await newPdf.save();
-
-            // --- 不再直接下載，而是開啟預覽 ---
             finalPdfBytes = pdfBytes;
             
             const blob = new Blob([finalPdfBytes], { type: 'application/pdf' });
@@ -1397,365 +1524,4 @@ window.onload = function() {
             setTimeout(() => progress.classList.remove('active', 'error'), 8000);
         }
     }
-
-
-    // --- Initial setup calls within onload ---
-    setThumbnailSize('medium');
-    tocModal.addEventListener('click', (e) => {
-        if (e.target === tocModal) {
-            closeTocEditor();
-        }
-    });
-    
-    // --- 新增：設定預覽 Modal 的點擊外部關閉 ---
-    const previewModal = document.getElementById('previewModal');
-    previewModal.addEventListener('click', (e) => {
-        if (e.target === previewModal) {
-            closePreview();
-        }
-    });
-    
-    // 3. 在初始化區（接近 window.onload 結尾）加入：
-    // === 目錄勾選框控制設定面板顯示 ===
-    addTocCheckbox.addEventListener('change', function() {
-        if (this.checked) {
-            tocSettingsPanel.style.display = 'block';
-        } else {
-            tocSettingsPanel.style.display = 'none';
-        }
-    });
-
-    // 初始化時根據勾選狀態顯示/隱藏
-    if (addTocCheckbox.checked) {
-        tocSettingsPanel.style.display = 'block';
-    }
-// ==========================================================
-    // === 新增功能：快速選取邏輯
-    // ==========================================================
-
-    function updateQuickSelectFileOptions() {
-        const qsFileSelect = document.getElementById('qsFileSelect');
-        if (!qsFileSelect) return;
-
-        qsFileSelect.innerHTML = '';
-
-        if (pdfFiles.length === 0) {
-            const option = document.createElement('option');
-            option.value = "-1";
-            option.text = "-- 請先載入檔案 --";
-            qsFileSelect.appendChild(option);
-            return;
-        }
-
-        const allOption = document.createElement('option');
-        allOption.value = "-1";
-        allOption.text = "📂 所有已載入檔案";
-        qsFileSelect.appendChild(allOption);
-
-        pdfFiles.forEach((file, index) => {
-            const option = document.createElement('option');
-            option.value = index;
-            option.text = `📄 ${index + 1}. ${file.name}`;
-            qsFileSelect.appendChild(option);
-        });
-    }
-// 2. 執行「智慧勾選」 (Apply Quick Selection)
-    // 邏輯：根據下拉選單的條件，把符合的頁面 isChecked 設為 true
-    function applyQuickSelection() {
-        const fileIndexStr = document.getElementById('qsFileSelect').value;
-        const type = document.getElementById('qsTypeSelect').value;
-        const targetFileIndex = parseInt(fileIndexStr); 
-
-        if (pdfFiles.length === 0) {
-            showNotification('請先載入 PDF 檔案', 'error');
-            return;
-        }
-
-        let matchCount = 0;
-
-        // 定義檢查單一頁面的邏輯
-        const checkPageLogic = (file, page, pIndex) => {
-            let shouldCheck = false;
-            const pageNum = page.pageNum;
-
-            switch (type) {
-                case 'all': shouldCheck = true; break;
-                case 'odd': shouldCheck = (pageNum % 2 !== 0); break;
-                case 'even': shouldCheck = (pageNum % 2 === 0); break;
-                case 'first': shouldCheck = (pIndex === 0); break;
-                case 'last': shouldCheck = (pIndex === file.pages.length - 1); break;
-                case 'blank': 
-                    // 簡單判斷：如果標題沒抓到內容 (通常標題會是 "Page X")
-                    if (page.firstLine === `Page ${pageNum}`) shouldCheck = true;
-                    break;
-            }
-
-            if (shouldCheck) {
-                page.isChecked = true; // ★ 關鍵：只勾選，不取消已勾選的其他頁面 (累加模式)
-                matchCount++;
-            }
-        };
-
-        // 執行迴圈
-        if (targetFileIndex === -1) {
-            pdfFiles.forEach(file => {
-                file.pages.forEach((page, pIndex) => checkPageLogic(file, page, pIndex));
-            });
-        } else {
-            const file = pdfFiles[targetFileIndex];
-            if (file) {
-                file.pages.forEach((page, pIndex) => checkPageLogic(file, page, pIndex));
-            }
-        }
-
-        if (matchCount > 0) {
-            renderSourcePages(); // 重新渲染以顯示勾勾
-            updateSelectedCountInfo();
-            showNotification(`已自動勾選 ${matchCount} 個頁面`, 'success');
-        } else {
-            showNotification('沒有符合條件的頁面', 'info');
-        }
-    }
-
-    // 3. 快速取消所有勾選 (Helper function)
-    function clearAllSourceChecks() {
-        pdfFiles.forEach(file => {
-            file.pages.forEach(page => page.isChecked = false);
-        });
-        document.getElementById('selectAllSource').checked = false;
-        renderSourcePages();
-        updateSelectedCountInfo();
-    }
-    function executeQuickSelect() {
-        const fileIndexStr = document.getElementById('qsFileSelect').value;
-        const type = document.getElementById('qsTypeSelect').value;
-        const targetFileIndex = parseInt(fileIndexStr); // -1 代表所有檔案
-
-        if (pdfFiles.length === 0) {
-            showNotification('請先載入 PDF 檔案', 'error');
-            return;
-        }
-
-        let addedCount = 0;
-
-        // 定義處理單一檔案的邏輯
-        const processFile = (fIndex) => {
-            const file = pdfFiles[fIndex];
-            if (!file) return;
-
-            file.pages.forEach((page, pIndex) => {
-                let shouldSelect = false;
-                const pageNum = page.pageNum; // 實際頁碼 (從1開始)
-
-                switch (type) {
-                    case 'all':
-                        shouldSelect = true;
-                        break;
-                    case 'odd':
-                        shouldSelect = (pageNum % 2 !== 0);
-                        break;
-                    case 'even':
-                        shouldSelect = (pageNum % 2 === 0);
-                        break;
-                    case 'first':
-                        shouldSelect = (pIndex === 0);
-                        break;
-                    case 'last':
-                        shouldSelect = (pIndex === file.pages.length - 1);
-                        break;
-                    case 'blank':
-                        // 判斷空白頁邏輯：依賴 extractTitleFromPage 的結果
-                        // 如果標題完全等於 "Page X"，通常代表沒有提取到有意義的文字
-                        // 或是檢查 firstLine 是否包含特定關鍵字
-                        // *注意：這不是完美的空白頁檢測（因為掃描檔全是圖片），但對文字型PDF有效*
-                        if (page.firstLine === `Page ${pageNum}`) {
-                            shouldSelect = true;
-                        }
-                        break;
-                }
-
-                if (shouldSelect) {
-                    // 檢查是否已經在右側列表中 (避免重複加入)
-                    // 如果您希望允許重複，可以移除這個檢查，但通常使用者不希望重複
-                    // 這裡我設定為：直接加入，不進行去重檢查 (因為有時候需要複製頁面)
-                    // 如果要模仿 togglePage 的行為，我們就直接 push
-                    
-                    selectedPages.push({ 
-                        type: 'page', 
-                        fileIndex: fIndex, 
-                        pageNum: page.pageNum, 
-                        fileName: file.name, 
-                        canvas: page.canvas, 
-                        firstLine: page.firstLine,
-                        rotation: 0 
-                    });
-                    addedCount++;
-                }
-            });
-        };
-
-        // 判斷是處理單一檔案還是所有檔案
-        if (targetFileIndex === -1) {
-            // 所有檔案
-            for (let i = 0; i < pdfFiles.length; i++) {
-                processFile(i);
-            }
-        } else {
-            // 單一檔案
-            processFile(targetFileIndex);
-        }
-
-        if (addedCount > 0) {
-            renderSelectedPages();
-            showNotification(`已加入 ${addedCount} 個頁面`, 'success');
-            
-            // 自動滾動到底部以顯示新加入的頁面
-            const container = document.getElementById('selectedPages');
-            container.scrollTop = container.scrollHeight;
-        } else {
-            showNotification('沒有符合條件的頁面', 'info');
-        }
-    }
-
-
-    // 2. 全選 / 取消全選
-    function toggleSelectAllSource(checkbox) {
-        const isChecked = checkbox.checked;
-        pdfFiles.forEach(file => {
-            file.pages.forEach(page => {
-                page.isChecked = isChecked;
-            });
-        });
-        renderSourcePages();
-        updateSelectedCountInfo();
-    }
-
-    // 3. 更新「已選 X 頁」的文字提示
-    function updateSelectedCountInfo() {
-        let count = 0;
-        pdfFiles.forEach(f => f.pages.forEach(p => { if(p.isChecked) count++; }));
-        const info = document.getElementById('selectedCountInfo');
-        if(info) info.textContent = `(已選 ${count} 頁)`;
-    }
-
-    // 4. 批次功能：加入右側 (Add to Target)
-    function batchAddToTarget() {
-        let addedCount = 0;
-        pdfFiles.forEach((file, fIndex) => {
-            file.pages.forEach((page, pIndex) => {
-                if (page.isChecked) {
-                    // 複製一份資料到右側 selectedPages
-                    // 注意：我們會把 sourceRotation 帶過去，作為初始旋轉值
-                    selectedPages.push({ 
-                        type: 'page', 
-                        fileIndex: fIndex, 
-                        pageNum: page.pageNum, 
-                        fileName: file.name, 
-                        canvas: page.canvas, 
-                        firstLine: page.firstLine,
-                        rotation: page.sourceRotation || 0 
-                    });
-                    addedCount++;
-                    // 選項：加入後是否要取消勾選？
-                    // page.isChecked = false; 
-                }
-            });
-        });
-
-        if (addedCount > 0) {
-            renderSelectedPages();
-            showNotification(`✅ 已加入 ${addedCount} 個頁面到右側`, 'success');
-            // 自動捲動到底部
-            const container = document.getElementById('selectedPages');
-            container.scrollTop = container.scrollHeight;
-        } else {
-            showNotification('⚠️ 請先勾選要加入的頁面', 'info');
-        }
-    }
-
-    // 5. 批次功能：刪除來源頁面 (Delete from Source)
-    function batchDeleteFromSource() {
-        let deletedCount = 0;
-        
-        // 檢查是否有選取
-        let hasSelection = false;
-        pdfFiles.forEach(f => f.pages.forEach(p => { if(p.isChecked) hasSelection = true; }));
-        
-        if (!hasSelection) {
-            showNotification('⚠️ 請先勾選要刪除的頁面', 'info');
-            return;
-        }
-
-        if (!confirm("確定要從來源列表中刪除選取的頁面嗎？")) return;
-
-        // 因為要刪除陣列元素，建議從後往前刪，或者建立新陣列
-        // 這裡採用「建立新陣列」的方式比較穩當
-        const newPdfFiles = [];
-
-        pdfFiles.forEach(file => {
-            // 過濾掉被勾選(要刪除)的頁面
-            const remainingPages = file.pages.filter(p => {
-                if (p.isChecked) {
-                    deletedCount++;
-                    return false; // 刪除
-                }
-                return true; // 保留
-            });
-
-            // 如果該檔案還有頁面，就保留該檔案物件
-            if (remainingPages.length > 0) {
-                file.pages = remainingPages;
-                newPdfFiles.push(file);
-            }
-        });
-
-        pdfFiles = newPdfFiles;
-        
-        // 清除全選狀態
-        document.getElementById('selectAllSource').checked = false;
-        
-        updateFileList(); // 檔案可能被整個刪除，需更新列表
-        renderSourcePages();
-        updateSelectedCountInfo();
-        showNotification(`🗑️ 已刪除 ${deletedCount} 個頁面`, 'success');
-    }
-
-    // 6. 批次功能：旋轉來源頁面 (Rotate Source)
-    // 請確認此函式已加入 script.js
-    function batchRotateSource(deg) {
-        let rotatedCount = 0;
-        let hasSelection = false;
-
-        pdfFiles.forEach(file => {
-            file.pages.forEach(page => {
-                if (page.isChecked) {
-                    hasSelection = true;
-                    // 初始化角度 (如果之前沒設定過)
-                    if (typeof page.sourceRotation === 'undefined') {
-                        page.sourceRotation = 0;
-                    }
-                    
-                    const current = page.sourceRotation;
-                    // 計算新角度
-                    page.sourceRotation = (current + deg + 360) % 360;
-                    rotatedCount++;
-                }
-            });
-        });
-
-        if (rotatedCount > 0) {
-            renderSourcePages(); // 重新渲染畫面以顯示旋轉
-            // 可以在此加入 console.log 確認是否有執行
-            console.log(`已旋轉 ${rotatedCount} 個頁面`);
-        } else {
-            if (!hasSelection) {
-                // 如果使用者沒有勾選任何頁面，顯示提示
-                showNotification('⚠️ 請先勾選要旋轉的頁面 (左側來源)', 'info');
-            }
-        }
-    }
-    
-// ==========================================================
-// === 關閉 window.onload 監聽器
-// ==========================================================
 };
