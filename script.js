@@ -20,7 +20,8 @@ window.onload = function() {
     let thumbnailSize = 'medium'; // 左側縮圖大小
     let isSourceEditMode = false; // 左側是否處於編輯模式
     
-    let targetViewMode = 'grid'; // 右側檢視模式
+    // ✅ [修正 2] 預設改為清單顯示
+    let targetViewMode = 'list'; // 右側檢視模式 (原本是 'grid')
     let targetThumbnailSize = 'medium'; // 右側縮圖大小
 
     // 操作輔助變數
@@ -142,6 +143,10 @@ window.onload = function() {
     // 6. 初始化執行 (Initialization)
     // ------------------------------------------------------
     setThumbnailSize('medium'); // 設定預設縮圖大小
+    
+    // 確保右側預設按鈕狀態正確
+    setTargetViewMode(targetViewMode); 
+
     if (addTocCheckbox.checked) {
         tocSettingsPanel.style.display = 'block';
     }
@@ -551,7 +556,7 @@ window.onload = function() {
                     fileIndex: fileIndex, 
                     pageNum: page.pageNum, 
                     fileName: file.name, 
-                    canvas: page.canvas, 
+                    canvas:page.canvas, 
                     firstLine: page.firstLine,
                     rotation: 0
                 });
@@ -744,8 +749,6 @@ window.onload = function() {
     }
 
     function executeQuickSelect() {
-        // 此函式與 applyQuickSelection 類似，但行為是直接加入右側。
-        // 為保持原始功能完整性保留此函式，但建議統一使用 applyQuickSelection + batchAddToTarget
         const fileIndexStr = document.getElementById('qsFileSelect').value;
         const type = document.getElementById('qsTypeSelect').value;
         const targetFileIndex = parseInt(fileIndexStr);
@@ -1110,6 +1113,7 @@ window.onload = function() {
         });
     }
 
+    // ✅ [修正 3] 拖曳誤差改進
     function getDragAfterElement(container, y) {
         const draggableElements = [...container.children].filter(child =>
             child.matches('.selected-page-item, .selected-divider-item') && !child.classList.contains('dragging')
@@ -1117,14 +1121,16 @@ window.onload = function() {
 
         return draggableElements.reduce((closest, child) => {
             const box = child.getBoundingClientRect();
-            const midpoint = box.top + box.height / 2;
-            const offset = y - midpoint;
-            if (offset > 0 && offset < closest.offset) { 
+            // 改為判斷是否在元素上半部 (offset < 0)
+            const offset = y - box.top - box.height / 2;
+            
+            // 我們希望找到 offset 是負數（滑鼠在元素上半部）且最接近 0 的那個元素
+            if (offset < 0 && offset > closest.offset) { 
                 return { offset: offset, element: child };
             } else {
                 return closest;
             }
-         }, { offset: Number.POSITIVE_INFINITY }).element;
+         }, { offset: Number.NEGATIVE_INFINITY }).element;
     }
 
     // ======================================================
@@ -1235,7 +1241,8 @@ window.onload = function() {
             return;
         }
 
-        const { PDFDocument, rgb, StandardFonts, PDFName, PDFArray } = PDFLib;
+        // ✅ [修正 1] 這裡加入了 degrees
+        const { PDFDocument, rgb, StandardFonts, PDFName, PDFArray, degrees } = PDFLib;
 
         const pageItems = selectedPages.filter(p => p && p.type !== 'divider');
         if (pageItems.length === 0) {
@@ -1436,18 +1443,30 @@ window.onload = function() {
                     
                     const [copiedPage] = await newPdf.copyPages(sourcePdf, [item.pageNum - 1]);
 
-                    if (item.rotation && item.rotation !== 0) {
-                        copiedPage.rotate(item.rotation);
+                    // ✅ [修正 1] 正確的旋轉處理邏輯 (使用 degrees)
+                    
+                    // 1. 取得原始頁面角度 (copyPages 會保留來源角度)
+                    const existingRotation = copiedPage.getRotation().angle;
+
+                    // 2. 先將頁面加入新的 PDF
+                    const newPage = newPdf.addPage(copiedPage);
+                    
+                    // 3. 計算並應用新的總旋轉角度
+                    const userRotation = item.rotation || 0;
+                    const totalRotation = (existingRotation + userRotation) % 360;
+                    
+                    if (totalRotation !== 0) {
+                         newPage.setRotation(degrees(totalRotation));
+                    } else {
+                         newPage.setRotation(degrees(0));
                     }
-                    
-                    newPdf.addPage(copiedPage);
-                    
+
                     // 新增頁碼
                     if (addPageNumbers) {
                         const newPageNumber = `${pageCounterForContent + pageOffset}`;
-                        const { width, height } = copiedPage.getSize();
+                        const { width, height } = newPage.getSize();
                         if (width > 0 && height > 0) {
-                            copiedPage.drawText(newPageNumber, { 
+                            newPage.drawText(newPageNumber, { 
                                 x: width - 40, y: 30, 
                                 size: 10, font: customFont, color: rgb(0, 0, 0) 
                             });
