@@ -409,12 +409,16 @@ window.onload = function() {
         }
         sourcePages.innerHTML = pdfFiles.map((file, fileIndex) => {
              if (!file) return '';
+             
+             // [修正] 強制 List 模式使用垂直排列 (flex-direction: column)
              const pagesHtml = viewMode === 'grid' 
                 ? `<div class="pages-grid">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'grid')).join('')}</div>`
-                : `<div class="pages-list">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'list')).join('')}</div>`;
+                : `<div class="pages-list" style="display: flex; flex-direction: column; width: 100%;">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'list')).join('')}</div>`;
+             
              return `<div class="pdf-file"><div class="pdf-file-header"><div class="pdf-file-name">${file.name || 'Unknown File'}</div></div>${pagesHtml}</div>`;
         }).join('');
 
+        // 重新繪製 Canvas (保持不變)
         pdfFiles.forEach((file, fileIndex) => {
              if (file) {
                  file.pages.forEach((page, pageIndex) => {
@@ -425,8 +429,6 @@ window.onload = function() {
                              canvas.width = page.canvas.width;
                              canvas.height = page.canvas.height;
                              ctx.drawImage(page.canvas, 0, 0);
-                         } else {
-                             console.warn(`Invalid canvas dimensions for source_${fileIndex}_${pageIndex}`);
                          }
                      }
                  });
@@ -443,7 +445,6 @@ window.onload = function() {
         const currentRotation = page.sourceRotation || 0; 
         const rotationStyle = `transform: rotate(${currentRotation}deg); transition: transform 0.3s;`;
         
-        // onclick 傳遞 event 參數以支援 shift 多選
         const clickAction = `onclick="toggleSourceCheck(${fileIndex}, ${pageIndex}, event)"`;
         const checkboxAction = `onclick="event.stopPropagation(); toggleSourceCheck(${fileIndex}, ${pageIndex}, event)"`;
 
@@ -458,13 +459,14 @@ window.onload = function() {
                 </div>`;
         } else {
              const title = page.firstLine || `Page ${page.pageNum}`;
+             // [修正] 加入 style="width: 100%;" 確保寬度佔滿容器
             return `
-                <div class="page-list-item ${checkedClass}" ${clickAction} title="${title}">
-                    <input type="checkbox" class="page-checkbox" ${checkedAttr} ${checkboxAction}>
-                    <div style="width: 30px; display: flex; justify-content: center;">
+                <div class="page-list-item ${checkedClass}" ${clickAction} title="${title}" style="width: 100%; box-sizing: border-box; display: flex; align-items: center; padding: 5px; border-bottom: 1px solid #eee;">
+                    <input type="checkbox" class="page-checkbox" ${checkedAttr} ${checkboxAction} style="margin-right: 10px;">
+                    <div style="width: 30px; display: flex; justify-content: center; margin-right: 10px;">
                         <canvas id="source_${fileIndex}_${pageIndex}" style="width: 100%; ${rotationStyle}"></canvas>
                     </div>
-                    <div class="page-list-text">${title}</div>
+                    <div class="page-list-text" style="flex: 1;">${title}</div>
                     <div class="page-list-number">第 ${page.pageNum} 頁</div>
                 </div>`;
         }
@@ -840,19 +842,37 @@ window.onload = function() {
     function renderSelectedPages() {
         if (selectedPages.length === 0) {
             selectedPagesContainer.innerHTML = '<div class="empty-message">尚未選擇任何頁面</div>';
+            // 即使是空訊息，也重置樣式以免跑版
+            selectedPagesContainer.style.display = 'flex';
+            selectedPagesContainer.style.flexDirection = 'column';
             updateTargetSelectedInfo();
             return;
         }
 
         selectedPagesContainer.className = `selected-pages ${targetViewMode}-view`;
 
+        // [修正] 強制設定容器的 Flex 方向
+        if (targetViewMode === 'list') {
+            selectedPagesContainer.style.display = 'flex';
+            selectedPagesContainer.style.flexDirection = 'column'; // 強制由上而下
+            selectedPagesContainer.style.flexWrap = 'nowrap';
+            selectedPagesContainer.style.alignContent = 'stretch';
+        } else {
+            // Grid 模式
+            selectedPagesContainer.style.display = 'flex';
+            selectedPagesContainer.style.flexDirection = 'row';
+            selectedPagesContainer.style.flexWrap = 'wrap';
+            selectedPagesContainer.style.alignContent = 'flex-start';
+        }
+
         selectedPagesContainer.innerHTML = selectedPages.map((item, index) => {
              if (!item) return '';
              
              // 分隔線
              if (item.type === 'divider') {
+                // 分隔線在任何模式下都應該佔滿整行
                 return `
-                    <div class="selected-divider-item" draggable="true" data-index="${index}">
+                    <div class="selected-divider-item" draggable="true" data-index="${index}" style="width: 100%; margin-bottom: 5px;">
                         <span class="drag-handle">::</span>
                          <div class="selected-divider-title">${item.firstLine || 'New Section'}</div> 
                         <div class="page-actions">
@@ -882,16 +902,17 @@ window.onload = function() {
                     </div>
                 </div>`;
             } else {
+                // [修正] List Item 強制寬度 100%
                 return `
-                <div class="selected-page-item list-item ${checkedClass}" draggable="true" data-index="${index}" ${clickAction}>
-                    <span class="drag-handle">::</span>
-                    <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleTargetCheck(${index})">
-                    <div class="list-thumb-wrapper">
-                        <canvas id="selected_${index}" style="${rotationStyle}"></canvas>
+                <div class="selected-page-item list-item ${checkedClass}" draggable="true" data-index="${index}" ${clickAction} style="width: 100%; display: flex; align-items: center; margin-bottom: 5px;">
+                    <span class="drag-handle" style="cursor: grab; margin-right: 10px;">::</span>
+                    <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleTargetCheck(${index})" style="margin-right: 10px;">
+                    <div class="list-thumb-wrapper" style="width: 40px; display:flex; justify-content:center; margin-right: 10px;">
+                        <canvas id="selected_${index}" style="${rotationStyle}; max-width: 100%;"></canvas>
                     </div>
-                    <div class="selected-page-info">
+                    <div class="selected-page-info" style="flex: 1;">
                         <div class="selected-page-title">${index + 1}. ${title}</div>
-                        <div class="selected-page-source">${source}</div>
+                        <div class="selected-page-source" style="font-size: 0.85em; color: #666;">${source}</div>
                     </div>
                 </div>`;
             }
