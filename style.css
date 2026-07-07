@@ -41,14 +41,34 @@ body {
     overflow: hidden;
 }
 
-/* 面板通用樣式 */
+/* 面板通用樣式：工具列固定，只有頁面清單捲動 */
 .source-panel, .target-panel {
     flex: 1;
+    min-width: 0;
     background: #ecf0f1;
     border-radius: 8px;
     padding: 20px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#sourcePages, #selectedPages {
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
 }
+
+/* 左右面板寬度調整分隔條 */
+.panel-resizer {
+    width: 6px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    border-radius: 3px;
+    background: #bdc3c7;
+    transition: background 0.2s;
+}
+.panel-resizer:hover, .panel-resizer.dragging { background: #3498db; }
 
 .panel-title {
     font-size: 18px;
@@ -514,18 +534,14 @@ input[type="file"] { display: none; }
    7. Modal 與其他設定
    ========================================= */
 
-.modal-overlay {
-    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-    background: rgba(0, 0, 0, 0.6); display: none;
-    justify-content: center; align-items: center; z-index: 1000;
-}
-
-.modal-content {
+dialog.modal-content {
+    border: none;
     background: white; padding: 25px; border-radius: 8px;
     width: 90%; max-width: 600px;
     box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-    display: flex; flex-direction: column; gap: 15px;
 }
+dialog.modal-content[open] { display: flex; flex-direction: column; gap: 15px; }
+dialog.modal-content::backdrop { background: rgba(0, 0, 0, 0.6); }
 .modal-content h3 { color: #2c3e50; border-bottom: 1px solid #ecf0f1; padding-bottom: 10px; }
 
 #tocTextarea {
