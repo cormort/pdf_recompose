@@ -65,6 +65,8 @@ window.onload = function() {
     const notification = document.getElementById('notification');
     const addTocCheckbox = document.getElementById('addTocCheckbox');
     const tocSettingsPanel = document.getElementById('tocSettingsPanel');
+    const addSpacingCheckbox = document.getElementById('addSpacingCheckbox');
+    const spacingSettingsPanel = document.getElementById('spacingSettingsPanel');
     const previewModal = document.getElementById('previewModal');
 
     // ------------------------------------------------------
@@ -117,15 +119,31 @@ window.onload = function() {
     // ------------------------------------------------------
     
     // 拖曳上傳
-    uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('drag-over'); });
+    uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); uploadArea.classList.add('drag-over'); });
     uploadArea.addEventListener('dragleave', () => { uploadArea.classList.remove('drag-over'); });
     uploadArea.addEventListener('drop', (e) => {
         e.preventDefault();
+        e.stopPropagation();
         uploadArea.classList.remove('drag-over');
         const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
         handleFiles(files);
     });
     fileInput.addEventListener('change', (e) => { handleFiles(Array.from(e.target.files)); });
+
+    // 全視窗拖放：在視窗任意位置拖入 PDF 皆可載入
+    window.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadArea.classList.add('drag-over');
+    });
+    window.addEventListener('dragleave', (e) => {
+        if (!e.relatedTarget) uploadArea.classList.remove('drag-over');
+    });
+    window.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadArea.classList.remove('drag-over');
+        const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
+        if (files.length > 0) handleFiles(files);
+    });
 
     // Modal 點擊背景關閉 (dialog 的 backdrop 點擊 target 會是 dialog 本身)
     tocModal.addEventListener('click', (e) => { if (e.target === tocModal) tocModal.close(); });
@@ -145,9 +163,15 @@ window.onload = function() {
         tocSettingsPanel.style.display = this.checked ? 'block' : 'none';
     });
 
+    // 行距設定面板切換
+    addSpacingCheckbox.addEventListener('change', function() {
+        spacingSettingsPanel.style.display = this.checked ? 'block' : 'none';
+    });
+
     // ------------------------------------------------------
     // 6. 初始化執行 (Initialization)
     // ------------------------------------------------------
+    setViewMode(viewMode);   // 讓來源面板按鈕狀態與程式預設 (list) 一致
     setThumbnailSize('medium'); // 設定預設縮圖大小
 
     // 確保右側預設按鈕狀態正確
@@ -155,6 +179,9 @@ window.onload = function() {
 
     if (addTocCheckbox.checked) {
         tocSettingsPanel.style.display = 'block';
+    }
+    if (addSpacingCheckbox.checked) {
+        spacingSettingsPanel.style.display = 'block';
     }
 
     setupDragAndDrop(); // Sortable 綁在容器上，初始化一次即可
@@ -238,6 +265,61 @@ window.onload = function() {
         if(el) el.textContent = `(${count})`;
     }
 
+    // --- DOM 局部更新輔助（取代整面板重建，大量頁面時避免閃爍與卡頓） ---
+
+    // 依資料狀態同步「左側來源」的勾選樣式/核取方塊
+    function syncSourceCheckDom() {
+        let missing = false;
+        pdfFiles.forEach((file, fileIndex) => {
+            if (!file) return;
+            file.pages.forEach((page, pageIndex) => {
+                const canvas = document.getElementById(`source_${fileIndex}_${pageIndex}`);
+                const itemEl = canvas && canvas.closest('.page-item, .page-list-item');
+                if (itemEl) {
+                    itemEl.classList.toggle('checked', !!page.isChecked);
+                    const cb = itemEl.querySelector('.page-checkbox');
+                    if (cb) cb.checked = !!page.isChecked;
+                } else {
+                    missing = true;
+                }
+            });
+        });
+        if (missing) renderSourcePages(); // 兜底：若結構不完整才重建
+    }
+
+    // 依資料狀態同步「右側成品」的勾選樣式/核取方塊
+    function syncTargetCheckDom() {
+        selectedPages.forEach((item, index) => {
+            if (!item || item.type === 'divider') return;
+            const itemEl = selectedPagesContainer.querySelector(`[data-index="${index}"]`);
+            if (itemEl) {
+                itemEl.classList.toggle('checked', !!item.isChecked);
+                const cb = itemEl.querySelector('.page-checkbox');
+                if (cb) cb.checked = !!item.isChecked;
+            }
+        });
+    }
+
+    // 只更新「左側來源」旋轉樣式（transition 保留自原 inline style）
+    function applySourceRotationDom() {
+        pdfFiles.forEach((file, fileIndex) => {
+            if (!file) return;
+            file.pages.forEach((page, pageIndex) => {
+                const canvas = document.getElementById(`source_${fileIndex}_${pageIndex}`);
+                if (canvas) canvas.style.transform = `rotate(${(page.sourceRotation || 0) % 360}deg)`;
+            });
+        });
+    }
+
+    // 只更新「右側成品」旋轉樣式
+    function applyTargetRotationDom() {
+        selectedPages.forEach((item, index) => {
+            if (!item || item.type === 'divider') return;
+            const canvas = document.getElementById(`selected_${index}`);
+            if (canvas) canvas.style.transform = `rotate(${(item.rotation || 0) % 360}deg)`;
+        });
+    }
+
     function getGlobalPageIndex(fileIndex, pageIndex) {
         let count = 0;
         for (let i = 0; i < fileIndex; i++) {
@@ -269,123 +351,262 @@ window.onload = function() {
         progress.classList.remove('success', 'error');
         progress.classList.add('active');
 
-        for (const file of files) {
+        let loadedCount = 0;
+        for (const [fileIdx, file] of files.entries()) {
             const fileData = { name: file.name, file: file, pages: [] };
             try {
+                progress.textContent = `⏳ 正在載入檔案 ${fileIdx + 1}/${files.length}...`;
                 const arrayBuffer = await file.arrayBuffer();
                 const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-                for (let i = 1; i <= pdf.numPages; i++) {
-                    const page = await pdf.getPage(i);
-                    const canvas = document.createElement('canvas');
-                    const context = canvas.getContext('2d');
-                    const viewport = page.getViewport({ scale: 0.5 });
-                    canvas.width = viewport.width;
-                    canvas.height = viewport.height;
-                    await page.render({ canvasContext: context, viewport: viewport }).promise;
-                    
-                    const title = await extractTitleFromPage(page, i);
-                    fileData.pages.push({ 
-                        pageNum: i, 
-                        canvas: canvas, 
-                        firstLine: title,
-                        isChecked: false, 
-                        sourceRotation: 0 
-                    });
+                progress.textContent = `⏳ 正在載入「${file.name}」(${pdf.numPages} 頁)...`;
+                
+                // 並行渲染縮圖（限制同時 4 個 worker，避免大檔案卡死 UI）
+                const CONCURRENCY = 4;
+                let nextPageNum = 1;
+                let donePages = 0;
+                async function renderPageWorker() {
+                    while (nextPageNum <= pdf.numPages) {
+                        const i = nextPageNum++;
+                        try {
+                            const page = await pdf.getPage(i);
+                            const canvas = document.createElement('canvas');
+                            const context = canvas.getContext('2d');
+                            const viewport = page.getViewport({ scale: 0.5 });
+                            canvas.width = viewport.width;
+                            canvas.height = viewport.height;
+                            await page.render({ canvasContext: context, viewport: viewport }).promise;
+                            const info = await extractPageInfo(page, i);
+                            const frame = await extractPageFrame(page, page.getViewport({ scale: 1 }).height);
+                            fileData.pages[i - 1] = { 
+                                pageNum: i, 
+                                canvas: canvas, 
+                                firstLine: info.title,
+                                textItems: info.items,
+                                frameLines: frame,
+                                isChecked: false, 
+                                sourceRotation: 0 
+                            };
+                        } catch (pageErr) {
+                            console.error(`處理 "${file.name}" 第 ${i} 頁失敗:`, pageErr);
+                            // 保留佔位，避免頁碼索引錯亂
+                            fileData.pages[i - 1] = { 
+                                pageNum: i, 
+                                canvas: null, 
+                                firstLine: `Page ${i}`,
+                                textItems: [],
+                                frameLines: [],
+                                isChecked: false, 
+                                sourceRotation: 0 
+                            };
+                        }
+                        donePages++;
+                        // 讓出主執行緒，維持 UI 反應
+                        await new Promise(resolve => setTimeout(resolve, 0));
+                        // 定期回報進度（避免每頁更新造成抖動）
+                        if (donePages % 10 === 0 || donePages === pdf.numPages) {
+                            progress.textContent = `⏳ 正在載入「${file.name}」... ${donePages}/${pdf.numPages} 頁`;
+                        }
+                    }
                 }
+                const workers = [];
+                for (let w = 0; w < CONCURRENCY; w++) workers.push(renderPageWorker());
+                await Promise.all(workers);
+
                 pdf.destroy(); // 縮圖已產生，釋放 pdf.js worker 記憶體；生成時會用 file 重新讀取
                 pdfFiles.push(fileData);
+                loadedCount++;
             } catch (error) {
                 console.error(`處理檔案 "${file.name}" 失敗:`, error);
                 showNotification(`處理檔案 "${file.name}" 失敗，檔案可能已損毀。`, 'error');
             }
         }
+        fileInput.value = ''; // 允許再次選取同一個檔案
         updateFileList();
         renderSourcePages();
 
-        progress.textContent = '✅ 檔案載入完成！';
-        progress.classList.add('success');
-        setTimeout(() => { progress.classList.remove('active', 'success'); }, 2000);
+        if (loadedCount === 0) {
+            progress.textContent = '❌ 所有檔案載入失敗';
+            progress.classList.add('error');
+        } else {
+            progress.textContent = `✅ ${loadedCount} 個檔案載入完成！`;
+            progress.classList.add('success');
+        }
+        setTimeout(() => { progress.classList.remove('active', 'success', 'error'); }, 2000);
     }
 
-    async function extractTitleFromPage(page, pageNum) {
+    // 抽取頁面全文（座標、字級）與標題，一次 getTextContent 完成。
+    // items 的 y 為「頂部原點」座標（越小越靠頁頂），供行距重排使用；x 為左側原點。
+    async function extractPageInfo(page, pageNum) {
+        let items = [];
         try {
             const textContent = await page.getTextContent();
-            if (!textContent || !textContent.items || textContent.items.length === 0) {
-                 return `Page ${pageNum}`;
+            if (textContent && textContent.items) {
+                const viewport = page.getViewport({ scale: 1 });
+                const H = viewport.height;
+                items = textContent.items
+                    .map(item => ({
+                        s: item.str ? item.str.trim() : '',
+                        x: item.transform ? item.transform[4] : 0,
+                        y: item.transform ? H - item.transform[5] : 0,
+                        w: item.width || 0,
+                        h: item.height || 0,
+                    }))
+                    .filter(it => it.s.length > 0);
             }
-
-            const items = textContent.items
-                .map(item => ({
-                    text: item.str ? item.str.trim() : '',
-                    y: item.transform ? item.transform[5] : 0,
-                    x: item.transform ? item.transform[4] : 0,
-                    height: item.height || 0,
-                }))
-                .filter(item => item.text.length > 0)
-                .sort((a, b) => b.y - a.y || a.x - b.x);
-
-            if (items.length === 0) return `Page ${pageNum}`;
-
-            const lines = [];
-            let currentLine = [items[0]];
-            for (let i = 1; i < items.length; i++) {
-                if (Math.abs(items[i].y - currentLine[0].y) < 5) {
-                    currentLine.push(items[i]);
-                } else {
-                    lines.push(currentLine.sort((a, b) => a.x - b.x));
-                    currentLine = [items[i]];
-                }
-            }
-            lines.push(currentLine.sort((a, b) => a.x - b.x));
-
-            let title = `Page ${pageNum}`;
-            if (lines.length > 0 && lines[0].length > 0) {
-                let titleLineText = lines[0].map(item => item.text).join(' ');
-                if (lines.length > 1 && lines[1].length > 0) {
-                    const firstLineY = lines[0][0].y;
-                    const firstLineHeight = lines[0][0].height;
-                    const secondLineY = lines[1][0].y;
-                    if (Math.abs(firstLineY - secondLineY) < firstLineHeight * 1.8) {
-                        titleLineText += ' ' + lines[1].map(item => item.text).join(' ');
-                    }
-                }
-
-                let cleanedTitle = titleLineText;
-                // --- Title cleaning logic ---
-                if (!/^\d+\s*年度/.test(cleanedTitle.trim())) {
-                    cleanedTitle = cleanedTitle.replace(/^[\d\s.\-•]+\s*/, '');
-                }
-                const stopChars = ['一、', '二、', '（一）', '附註', '說明：', '中華民國'];
-                for (const char of stopChars) {
-                    const pos = cleanedTitle.indexOf(char);
-                    if (pos !== -1) cleanedTitle = cleanedTitle.substring(0, pos).trim();
-                }
-                const specialKeywords = ["說明", "表", "情形"];
-                let earliestIndex = -1; let keywordLength = 0;
-                for (const keyword of specialKeywords) {
-                    const currentIndex = cleanedTitle.indexOf(keyword);
-                    if (currentIndex !== -1) {
-                        if (earliestIndex === -1 || currentIndex < earliestIndex) {
-                            earliestIndex = currentIndex; keywordLength = keyword.length;
-                        }
-                    }
-                }
-                if (earliestIndex !== -1) {
-                    cleanedTitle = cleanedTitle.substring(0, earliestIndex + keywordLength);
-                }
-                cleanedTitle = cleanedTitle.replace(/\s+/g, '');
-                if (cleanedTitle.length > 70) {
-                    cleanedTitle = cleanedTitle.substring(0, 70) + '...';
-                }
-                // --- End Title cleaning logic ---
-
-                if (cleanedTitle) title = cleanedTitle;
-            }
-            return title;
         } catch (error) {
-             console.error(`Error extracting title from page ${pageNum}:`, error);
-             return `Page ${pageNum}`;
+            console.error(`Error extracting text from page ${pageNum}:`, error);
         }
+        return { title: buildTitleFromItems(items, pageNum), items: items };
+    }
+
+    function buildTitleFromItems(items, pageNum) {        if (items.length === 0) return `Page ${pageNum}`;
+
+        // 依位置排序：y 小（靠頁頂）在前，同行依 x 排序
+        const sorted = [...items].sort((a, b) => a.y - b.y || a.x - b.x);
+        const lines = [];
+        let currentLine = [sorted[0]];
+        for (let i = 1; i < sorted.length; i++) {
+            if (Math.abs(sorted[i].y - currentLine[0].y) < 5) {
+                currentLine.push(sorted[i]);
+            } else {
+                lines.push(currentLine.sort((a, b) => a.x - b.x));
+                currentLine = [sorted[i]];
+            }
+        }
+        lines.push(currentLine.sort((a, b) => a.x - b.x));
+
+        let title = `Page ${pageNum}`;
+        if (lines.length > 0 && lines[0].length > 0) {
+            let titleLineText = lines[0].map(item => item.s).join(' ');
+            if (lines.length > 1 && lines[1].length > 0) {
+                const firstLineY = lines[0][0].y;
+                const firstLineHeight = lines[0][0].h;
+                const secondLineY = lines[1][0].y;
+                if (Math.abs(firstLineY - secondLineY) < firstLineHeight * 1.8) {
+                    titleLineText += ' ' + lines[1].map(item => item.s).join(' ');
+                }
+            }
+
+            let cleanedTitle = titleLineText;
+            // --- Title cleaning logic ---
+            if (!/^\d+\s*年度/.test(cleanedTitle.trim())) {
+                cleanedTitle = cleanedTitle.replace(/^[\d\s.\-•]+\s*/, '');
+            }
+            const stopChars = ['一、', '二、', '（一）', '附註', '說明：', '中華民國'];
+            for (const char of stopChars) {
+                const pos = cleanedTitle.indexOf(char);
+                if (pos !== -1) cleanedTitle = cleanedTitle.substring(0, pos).trim();
+            }
+            const specialKeywords = ["說明", "表", "情形"];
+            let earliestIndex = -1; let keywordLength = 0;
+            for (const keyword of specialKeywords) {
+                const currentIndex = cleanedTitle.indexOf(keyword);
+                if (currentIndex !== -1) {
+                    if (earliestIndex === -1 || currentIndex < earliestIndex) {
+                        earliestIndex = currentIndex; keywordLength = keyword.length;
+                    }
+                }
+            }
+            if (earliestIndex !== -1) {
+                cleanedTitle = cleanedTitle.substring(0, earliestIndex + keywordLength);
+            }
+            cleanedTitle = cleanedTitle.replace(/\s+/g, '');
+            if (cleanedTitle.length > 70) {
+                cleanedTitle = cleanedTitle.substring(0, 70) + '...';
+            }
+            // --- End Title cleaning logic ---
+
+            if (cleanedTitle) title = cleanedTitle;
+        }
+        return title;
+    }
+
+    // 取頁面框線（水平/垂直直線段）— 移植自 pdf-row-shifter 的 getFrame + mergeLines。
+    // 座標統一為「頂部原點」（y 越小越靠頁頂），與文字抽取一致；t 為線寬(pt)。
+    async function extractPageFrame(page, H) {
+        try {
+            const ops = await page.getOperatorList();
+            const OPS = pdfjsLib.OPS;
+            const out = [];
+            // 路徑座標在目前的 CTM 之下，得自己追 transform / save / restore
+            // lw 預設 1（PDF 規格預設線寬）；明確寫 w 0 的 hairline 維持當 0.5 處理
+            let m = [1,0,0,1,0,0], stack = [], lw = 1;
+            const mul = (a,b) => [a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1],
+                                  a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3],
+                                  a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5]];
+            const app = (x,y) => [m[0]*x+m[2]*y+m[4], m[1]*x+m[3]*y+m[5]];
+            for (let i = 0; i < ops.fnArray.length; i++) {
+                const fn = ops.fnArray[i];
+                if (fn === OPS.save) { stack.push([m,lw]); continue; }          // 線寬也是圖形狀態，要跟著 q/Q 存回
+                if (fn === OPS.restore) { const s = stack.pop(); if (s) { m = s[0]; lw = s[1]; } continue; }
+                if (fn === OPS.transform) { m = mul(m, ops.argsArray[i]); continue; }
+                if (fn === OPS.setLineWidth) { lw = ops.argsArray[i][0]*Math.hypot(m[0],m[1]) || .5; continue; }
+                if (fn !== OPS.constructPath) continue;
+                const [cmds, raw] = ops.argsArray[i];
+                const co = [];
+                for (let j = 0; j < raw.length; j += 2) { const p = app(raw[j], raw[j+1]); co.push(p[0], p[1]); }
+                let k = 0, px = 0, py = 0;
+                for (const cm of cmds) {
+                    if (cm === OPS.moveTo) { px = co[k++]; py = co[k++]; }
+                    else if (cm === OPS.lineTo) {
+                        const x = co[k++], y = co[k++];
+                        if (Math.abs(y-py) < .5) out.push({x: Math.min(px,x), y: H-y, w: Math.abs(x-px), h: 0, t: lw});
+                        else if (Math.abs(x-px) < .5) out.push({x, y: H-Math.max(py,y), w: 0, h: Math.abs(y-py), t: lw});
+                        px = x; py = y;
+                    }
+                    else if (cm === OPS.rectangle) {
+                        const [x0,y0] = app(raw[k], raw[k+1]), [x1,y1] = app(raw[k]+raw[k+2], raw[k+1]+raw[k+3]);
+                        k += 4;
+                        const x = Math.min(x0,x1), w = Math.abs(x1-x0), tt = H-Math.max(y0,y1), h = Math.abs(y1-y0);
+                        px = x1; py = y1;
+                        // 長寬都大的是色塊（整頁底色），不是線；門檻 4pt
+                        if (Math.min(w,h) > 4) continue;
+                        // 扁矩形當線，厚度就是它的短邊
+                        if (h <= 4) out.push({x, y: tt+h/2, w, h: 0, t: h || .5});
+                        else out.push({x: x+w/2, y: tt, w: 0, h, t: w || .5});
+                        continue;
+                    }
+                    else k += cm === OPS.curveTo ? 6 : 2;
+                }
+            }
+            // 只留細長的框線，濾掉大色塊；再併掉厚度相接的同向線（天地線常是兩道細線相接）
+            return mergeFrameLines(out.filter(l => (l.w || l.h) > 2));
+        } catch (e) {
+            console.error('提取頁面框線失敗:', e);
+            return [];
+        }
+    }
+
+    // 併線：厚度相接／重疊且長度方向有交集的同向線併成一條（避免吸附時裂成兩條）
+    function mergeFrameLines(ls) {
+        const out = [];
+        for (const ori of [0, 1]) { // 0=水平 1=垂直
+            const g = ls.filter(l => (ori ? l.h : l.w) > 0).map(l => ({...l}));
+            const key = l => ori ? l.x : l.y;    // 粗細方向的中心
+            const t = l => l.t || .5;
+            g.sort((a,b) => key(a)-key(b));
+            const used = new Array(g.length).fill(false);
+            g.forEach((a,i) => {
+                if (used[i]) return;
+                let lo = key(a)-t(a)/2, hi = key(a)+t(a)/2;
+                let s = ori ? a.y : a.x, e = s + (ori ? a.h : a.w);
+                for (let j = i+1; j < g.length; j++) {
+                    const b = g[j]; if (used[j]) continue;
+                    const blo = key(b)-t(b)/2, bhi = key(b)+t(b)/2;
+                    if (blo > hi + .01) break;    // 已排序，再往後只會更遠
+                    const bs = ori ? b.y : b.x, be = bs + (ori ? b.h : b.w);
+                    if (be < s-.01 || bs > e+.01) continue;   // 長度方向沒交集
+                    // 只併「同一條線的兩半」：併起來不能比原本較長的那條更長
+                    if (Math.max(e,be)-Math.min(s,bs) > Math.max(e-s, be-bs)+1) continue;
+                    lo = Math.min(lo,blo); hi = Math.max(hi,bhi); s = Math.min(s,bs); e = Math.max(e,be);
+                    used[j] = true;
+                }
+                used[i] = true;
+                const c = (lo+hi)/2, th = hi-lo;
+                out.push(ori ? {x:c, y:s, w:0, h:e-s, t:th} : {x:s, y:c, w:e-s, h:0, t:th});
+            });
+        }
+        return out;
     }
 
     function updateFileList() {
@@ -398,7 +619,13 @@ window.onload = function() {
         updateQuickSelectFileOptions();
     }
 
-    function removeFile(index) {
+    async function removeFile(index) {
+        const file = pdfFiles[index];
+        // 若該檔頁面已在右側成品中，提醒使用者
+        const usedByTarget = selectedPages.some(p => p.type !== 'divider' && p.fileIndex === index);
+        if (usedByTarget && !(await askConfirm(`「${file ? file.name : '此檔案'}」有頁面在右側成品中，移除後會一併從成品刪除。確定移除嗎？`))) {
+            return;
+        }
         pdfFiles.splice(index, 1);
         selectedPages = selectedPages.filter(p => p.fileIndex !== index).map(p => {
             if (p.fileIndex > index) p.fileIndex--;
@@ -428,6 +655,9 @@ window.onload = function() {
         lastSourceClickGlobalIndex = null;
         clearFilesConfirmMode = false;
         fileInput.value = '';
+        // 釋放預覽/生成的暫存資源
+        finalPdfBytes = null;
+        if (previewModal.open) previewModal.close();
         clearBtn.classList.remove('confirm-mode');
         clearBtn.innerHTML = '🗑️ 清除所有檔案';
         updateFileList();
@@ -457,7 +687,9 @@ window.onload = function() {
 
     function renderSourcePages() {
         if (pdfFiles.length === 0) {
-            sourcePages.innerHTML = '<div class="empty-message">尚未載入任何 PDF 檔案</div>';
+            sourcePages.innerHTML = '<div class="empty-message"><span class="empty-icon">📂</span>尚未載入任何 PDF 檔案<div class="empty-hint">將 PDF 拖曳到視窗任意位置<br>或點擊左側「選擇檔案」按鈕</div></div>';
+            const selectAllSource = document.getElementById('selectAllSource');
+            if (selectAllSource) selectAllSource.checked = false; // 避免全選框殘留勾選態
             return;
         }
         sourcePages.innerHTML = pdfFiles.map((file, fileIndex) => {
@@ -466,7 +698,7 @@ window.onload = function() {
              // [修正] 強制 List 模式使用垂直排列 (flex-direction: column)
              const pagesHtml = viewMode === 'grid' 
                 ? `<div class="pages-grid">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'grid')).join('')}</div>`
-                : `<div class="pages-list" style="display: flex; flex-direction: column; width: 100%;">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'list')).join('')}</div>`;
+                : `<div class="pages-list">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'list')).join('')}</div>`;
              
              return `<div class="pdf-file"><div class="pdf-file-header"><div class="pdf-file-name">${esc(file.name || 'Unknown File')}</div></div>${pagesHtml}</div>`;
         }).join('');
@@ -505,7 +737,7 @@ window.onload = function() {
             return `
                 <div class="page-item ${checkedClass}" ${clickAction}>
                     <input type="checkbox" class="page-checkbox" ${checkedAttr} ${checkboxAction}>
-                    <div style="overflow:hidden; display:flex; justify-content:center; align-items:center; height: 100%; width: 100%;">
+                    <div class="page-thumb">
                         <canvas id="source_${fileIndex}_${pageIndex}" style="${rotationStyle}"></canvas>
                     </div>
                     <div class="page-number">第 ${page.pageNum} 頁</div> 
@@ -514,12 +746,12 @@ window.onload = function() {
              const title = esc(page.firstLine || `Page ${page.pageNum}`);
              // [修正] 加入 style="width: 100%;" 確保寬度佔滿容器
             return `
-                <div class="page-list-item ${checkedClass}" ${clickAction} title="${title}" style="width: 100%; box-sizing: border-box; display: flex; align-items: center; padding: 5px; border-bottom: 1px solid #eee;">
-                    <input type="checkbox" class="page-checkbox" ${checkedAttr} ${checkboxAction} style="margin-right: 10px;">
-                    <div style="width: 30px; display: flex; justify-content: center; margin-right: 10px;">
+                <div class="page-list-item ${checkedClass}" ${clickAction} title="${title}">
+                    <input type="checkbox" class="page-checkbox" ${checkedAttr} ${checkboxAction}>
+                    <div class="list-thumb-wrapper">
                         <canvas id="source_${fileIndex}_${pageIndex}" style="width: 100%; ${rotationStyle}"></canvas>
                     </div>
-                    <div class="page-list-text" style="flex: 1;">${title}</div>
+                    <div class="page-list-text">${title}</div>
                     <div class="page-list-number">第 ${page.pageNum} 頁</div>
                 </div>`;
         }
@@ -551,7 +783,7 @@ window.onload = function() {
                 }
             }
             lastSourceClickGlobalIndex = currentGlobalIndex;
-            renderSourcePages();
+            syncSourceCheckDom();
         } else {
             // 一般單點：就地更新該項目，避免整面重繪造成閃爍
             targetPage.isChecked = !targetPage.isChecked;
@@ -576,7 +808,7 @@ window.onload = function() {
                 page.isChecked = isChecked;
             });
         });
-        renderSourcePages();
+        syncSourceCheckDom();
         updateSelectedCountInfo();
     }
 
@@ -669,8 +901,8 @@ window.onload = function() {
         });
 
         if (rotatedCount > 0) {
-            renderSourcePages();
-            console.log(`已旋轉 ${rotatedCount} 個頁面`);
+            applySourceRotationDom();
+            showNotification(`↻ 已旋轉 ${rotatedCount} 個頁面`, 'success');
         } else {
             if (!hasSelection) showNotification('⚠️ 請先勾選要旋轉的頁面 (左側來源)', 'info');
         }
@@ -744,7 +976,7 @@ window.onload = function() {
         }
 
         if (matchCount > 0) {
-            renderSourcePages();
+            syncSourceCheckDom();
             updateSelectedCountInfo();
             showNotification(`已自動勾選 ${matchCount} 個頁面`, 'success');
         } else {
@@ -757,7 +989,7 @@ window.onload = function() {
             file.pages.forEach(page => page.isChecked = false);
         });
         document.getElementById('selectAllSource').checked = false;
-        renderSourcePages();
+        syncSourceCheckDom();
         updateSelectedCountInfo();
     }
 
@@ -784,10 +1016,12 @@ window.onload = function() {
 
     function renderSelectedPages() {
         if (selectedPages.length === 0) {
-            selectedPagesContainer.innerHTML = '<div class="empty-message">尚未選擇任何頁面</div>';
+            selectedPagesContainer.innerHTML = '<div class="empty-message"><span class="empty-icon">📋</span>尚未選擇任何頁面<div class="empty-hint">在左側勾選頁面後，點「➕ 加入右側」<br>或使用「⚡ 智慧勾選」快速選取</div></div>';
             // 即使是空訊息，也重置樣式以免跑版
             selectedPagesContainer.style.display = 'flex';
             selectedPagesContainer.style.flexDirection = 'column';
+            const selectAllTarget = document.getElementById('selectAllTarget');
+            if (selectAllTarget) selectAllTarget.checked = false; // 避免全選框殘留勾選態
             updateTargetSelectedInfo();
             return;
         }
@@ -815,7 +1049,7 @@ window.onload = function() {
              if (item.type === 'divider') {
                 // 分隔線在任何模式下都應該佔滿整行
                 return `
-                    <div class="selected-divider-item" data-index="${index}" style="width: 100%; margin-bottom: 5px;">
+                    <div class="selected-divider-item" data-index="${index}">
                         <span class="drag-handle">::</span>
                          <div class="selected-divider-title">${esc(item.firstLine || 'New Section')}</div>
                         <div class="page-actions">
@@ -847,15 +1081,15 @@ window.onload = function() {
             } else {
                 // [修正] List Item 強制寬度 100%
                 return `
-                <div class="selected-page-item list-item ${checkedClass}" data-index="${index}" ${clickAction} style="width: 100%; display: flex; align-items: center; margin-bottom: 5px;">
-                    <span class="drag-handle" style="cursor: grab; margin-right: 10px;">::</span>
-                    <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleTargetCheck(${index})" style="margin-right: 10px;">
-                    <div class="list-thumb-wrapper" style="width: 40px; display:flex; justify-content:center; margin-right: 10px;">
-                        <canvas id="selected_${index}" style="${rotationStyle}; max-width: 100%;"></canvas>
+                <div class="selected-page-item list-item ${checkedClass}" data-index="${index}" ${clickAction}>
+                    <span class="drag-handle">::</span>
+                    <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleTargetCheck(${index})">
+                    <div class="list-thumb-wrapper">
+                        <canvas id="selected_${index}" style="${rotationStyle}"></canvas>
                     </div>
-                    <div class="selected-page-info" style="flex: 1;">
+                    <div class="selected-page-info">
                         <div class="selected-page-title">${index + 1}. ${title}</div>
-                        <div class="selected-page-source" style="font-size: 0.85em; color: #666;">${source}</div>
+                        <div class="selected-page-source">${source}</div>
                     </div>
                 </div>`;
             }
@@ -896,7 +1130,7 @@ window.onload = function() {
         selectedPages.forEach(p => {
             if (p.type !== 'divider') p.isChecked = checked;
         });
-        renderSelectedPages();
+        syncTargetCheckDom();
     }
 
     // --- 批次操作 (Target) ---
@@ -925,7 +1159,7 @@ window.onload = function() {
             }
         });
         if (count > 0) {
-            renderSelectedPages();
+            applyTargetRotationDom();
         } else {
             showNotification('請先勾選右側頁面', 'info');
         }
@@ -933,7 +1167,6 @@ window.onload = function() {
 
     function removeSelectedPage(index) {
         selectedPages.splice(index, 1);
-        renderSourcePages();
         renderSelectedPages();
     }
 
@@ -978,19 +1211,18 @@ window.onload = function() {
         if (!clearSelectedConfirmMode) {
             clearSelectedConfirmMode = true;
             btn.classList.add('confirm-mode');
-            btn.textContent = '確定清除？';
+            btn.textContent = '確定清空全部？';
             setTimeout(() => {
                 clearSelectedConfirmMode = false;
                 btn.classList.remove('confirm-mode');
-                btn.textContent = '🗑️ 清除選取';
+                btn.textContent = '🗑️ 清空全部';
             }, 3000);
             return;
         }
         selectedPages = [];
         clearSelectedConfirmMode = false;
         btn.classList.remove('confirm-mode');
-        btn.textContent = '🗑️ 清除選取';
-        renderSourcePages();
+        btn.textContent = '🗑️ 清空全部';
         renderSelectedPages();
     }
 
@@ -1117,6 +1349,145 @@ window.onload = function() {
         if (previewModal.open) previewModal.close();
     }
 
+    // ======================================================
+    // === 邏輯區塊：行距重繪 (Line Spacing Re-render)
+    // ======================================================
+
+    // 分列：依 y 由小到大（頁頂→頁底），同行門檻 max(3, 半個字級)
+    // （移植自 pdf-row-shifter 的 lines()：中文與數字的基線常差數 pt，門檻跟字級走）
+    function buildLinesFromItems(items) {
+        const sorted = [...items].sort((a, b) => a.y - b.y);
+        const out = [];
+        let cur = null;
+        for (const it of sorted) {
+            const tol = Math.max(3, (cur ? Math.max(cur.sz, it.h) : it.h) * 0.5);
+            if (!cur || it.y - cur.y > tol) {
+                cur = { y: it.y, sz: it.h || 0, segs: [] };
+                out.push(cur);
+            } else {
+                cur.sz = Math.max(cur.sz, it.h || 0);
+            }
+            cur.segs.push(it);
+        }
+        return out.map(r => Object.assign(r.segs.sort((a, b) => a.x - b.x), { y: r.y }));
+    }
+
+    // 混合字型繪製：ASCII 用 Helvetica（抽取正確），CJK 用思源黑體。
+    // 原因：pdf-lib + fontkit 對 CJK 字型的 ASCII 子集化會產生錯誤 glyph 對映
+    // （渲染正常，但搜尋/複製會得到亂碼），拆開用標準字型則完全正常。
+    function splitMixedRuns(text) {
+        const runs = [];
+        let cur = null;
+        for (const ch of text) {
+            const isAscii = ch.codePointAt(0) <= 0xFF;
+            if (!cur || cur.ascii !== isAscii) {
+                cur = { ascii: isAscii, s: ch };
+                runs.push(cur);
+            } else {
+                cur.s += ch;
+            }
+        }
+        return runs;
+    }
+
+    function mixedTextWidth(text, size, cjkFont, asciiFont) {
+        let w = 0;
+        for (const run of splitMixedRuns(text)) {
+            w += (run.ascii ? asciiFont : cjkFont).widthOfTextAtSize(run.s, size);
+        }
+        return w;
+    }
+
+    function drawMixedText(page, text, x, y, size, cjkFont, asciiFont, color) {
+        let cx = x;
+        for (const run of splitMixedRuns(text)) {
+            const font = run.ascii ? asciiFont : cjkFont;
+            page.drawText(run.s, { x: cx, y: y, size: size, font: font, color: color });
+            cx += font.widthOfTextAtSize(run.s, size);
+        }
+        return cx - x; // 回傳總寬度
+    }
+
+    // 行距重繪：抽原文座標，以倍率重排行距後重畫（文字用思源黑體，表格框線一併重繪；
+    // 僅文字層頁面可用；圖片與其他繪圖不保留）
+    function renderTextPage(newPdf, srcPage, textItems, frameLines, cjkFont, asciiFont, mult) {
+        const { width, height } = srcPage.getSize();
+        const newPage = newPdf.addPage([width, height]);
+
+        const lines = buildLinesFromItems(textItems);
+        if (lines.length === 0) return newPage;
+
+        // 新列位置：頂列不動，其餘依「原列距 × 倍率」往頁底排（y 為頂部原點座標，往頁底為正）
+        const ys = [lines[0].y];
+        for (let i = 1; i < lines.length; i++) {
+            const gap = Math.max(lines[i].y - lines[i - 1].y, 1); // 原列距
+            ys.push(ys[i - 1] + gap * mult);
+        }
+
+        // 頁底防溢出：內容超出頁面可用區時，整體壓縮回 [頂列, 頁底留白] 之間
+        const marginBottom = 30;
+        const lastY = ys[ys.length - 1];
+        const bottomLimit = height - marginBottom;
+        if (lastY > bottomLimit) {
+            const topY = ys[0];
+            const available = bottomLimit - topY;
+            const needed = lastY - topY;
+            if (available > 0 && needed > available) {
+                const k = available / needed;
+                for (let i = 0; i < ys.length; i++) ys[i] = topY + (ys[i] - topY) * k;
+            }
+        }
+
+        // 原座標 → 新座標 的分段線性對映（頂列以上不動；最下列以下沿用最後一段斜率）
+        const origYs = lines.map(l => l.y);
+        const mapY = (y) => {
+            if (y <= origYs[0]) return y;
+            const n = origYs.length - 1;
+            if (y >= origYs[n]) {
+                const slope = (ys[n] - ys[n-1]) / Math.max(origYs[n] - origYs[n-1], 1);
+                return ys[n] + (y - origYs[n]) * slope;
+            }
+            for (let i = 1; i <= n; i++) {
+                if (y <= origYs[i]) {
+                    const t = (y - origYs[i-1]) / Math.max(origYs[i] - origYs[i-1], 1);
+                    return ys[i-1] + (ys[i] - ys[i-1]) * t;
+                }
+            }
+            return y;
+        };
+
+        // 先畫表格框線（水平線 y 對映；垂直線兩端 y 對映、x 不動）
+        for (const ln of (frameLines || [])) {
+            const thk = Math.max(ln.t || 0.5, 0.5);
+            const color = PDFLib.rgb(0, 0, 0);
+            if (ln.w > 0) {
+                const ny = mapY(ln.y);
+                newPage.drawLine({
+                    start: { x: ln.x, y: height - ny },
+                    end: { x: ln.x + ln.w, y: height - ny },
+                    thickness: thk, color: color,
+                });
+            } else if (ln.h > 0) {
+                const y1 = mapY(ln.y), y2 = mapY(ln.y + ln.h);
+                newPage.drawLine({
+                    start: { x: ln.x, y: height - y1 },
+                    end: { x: ln.x, y: height - y2 },
+                    thickness: thk, color: color,
+                });
+            }
+        }
+
+        // 再逐列重繪文字（y 轉回 bottom-origin 作為 pdf-lib 的基線）
+        for (let i = 0; i < lines.length; i++) {
+            const baseline = height - ys[i];
+            for (const seg of lines[i]) {
+                const size = Math.max(4, seg.h || 10);
+                drawMixedText(newPage, seg.s, seg.x, baseline, size, cjkFont, asciiFont, PDFLib.rgb(0, 0, 0));
+            }
+        }
+        return newPage;
+    }
+
     async function generatePDF() {
         if (typeof PDFLib === 'undefined' || typeof PDFLib.PDFDocument === 'undefined') {
             console.error("PDFLib not available in generatePDF");
@@ -1142,6 +1513,7 @@ window.onload = function() {
             
             const newPdf = await PDFDocument.create();
             let customFont;
+            let asciiFont;
             
             // 建立 PDF-Lib 文件快取
             const pdfLibDocCache = new Map();
@@ -1157,6 +1529,8 @@ window.onload = function() {
                 if (typeof fontkit === 'undefined') throw new Error("fontkit 函式庫載入失敗");
                 newPdf.registerFontkit(fontkit); 
                 customFont = await newPdf.embedFont(fontBytes);
+                // ASCII 用標準字型（pdf-lib 對 CJK 字型的 ASCII 子集化會產生錯誤 glyph 對映）
+                asciiFont = await newPdf.embedFont(StandardFonts.Helvetica);
                 progress.textContent = '中文字型載入成功!';
                 await new Promise(resolve => setTimeout(resolve, 500));
             } catch (fontError) {
@@ -1164,6 +1538,7 @@ window.onload = function() {
                 showNotification(`警告：無法載入本地字型。目錄將使用英文字型。`, 'error');
                 try {
                     customFont = await newPdf.embedFont(StandardFonts.Helvetica);
+                    asciiFont = customFont; // 全部用 Helvetica 時 ASCII 字型相同
                 } catch (embedError) {
                     console.error("Failed to embed fallback font:", embedError);
                     showNotification("致命錯誤：無法嵌入預設字型。", 'error');
@@ -1175,6 +1550,8 @@ window.onload = function() {
             
             const addToc = addTocCheckbox.checked;
             const addPageNumbers = document.getElementById('addPageNumbersCheckbox').checked;
+            const spacingEnabled = addSpacingCheckbox.checked;
+            const spacingMult = Math.min(2, Math.max(0.5, parseFloat(document.getElementById('spacingMultiplier').value) || 1));
             
             let tocPages = []; 
             let tocLinkData = []; 
@@ -1219,18 +1596,12 @@ window.onload = function() {
                         tocPage = newPdf.addPage([842, 595]);
                         tocPages.push(tocPage);
                         yPosition = 595 - 90;
-                        tocPage.drawText('目錄 (續)', { 
-                            x: 50, y: 595 - 50, 
-                            size: TOC_CONFIG.MAIN_TITLE_SIZE, font: customFont, color: rgb(0,0,0) 
-                        });
+                        drawMixedText(tocPage, '目錄 (續)', 50, 595 - 50, TOC_CONFIG.MAIN_TITLE_SIZE, customFont, asciiFont, rgb(0, 0, 0));
                     }
 
                     if (item.type === 'divider') {
                         yPosition -= 10;
-                        tocPage.drawText(item.firstLine || 'New Section', { 
-                            x: 50, y: yPosition, 
-                            size: TOC_CONFIG.SECTION_TITLE_SIZE, font: customFont, color: rgb(0,0,0) 
-                        });
+                        drawMixedText(tocPage, item.firstLine || 'New Section', 50, yPosition, TOC_CONFIG.SECTION_TITLE_SIZE, customFont, asciiFont, rgb(0, 0, 0));
                         yPosition -= 25;
                     } else {
                         pageCounterForToc++;
@@ -1242,34 +1613,28 @@ window.onload = function() {
                         const pageContentWidth = tocPage.getWidth() - leftMargin - rightMargin;
                         
                         let pageNumWidth = 0;
-                        try { pageNumWidth = customFont.widthOfTextAtSize(pageNumStr, TOC_CONFIG.ITEM_PAGENUM_SIZE); } catch (e) {}
+                        try { pageNumWidth = mixedTextWidth(pageNumStr, TOC_CONFIG.ITEM_PAGENUM_SIZE, customFont, asciiFont); } catch (e) {}
                         
                         let truncatedTitle = title;
                         let titleWidth = 0;
-                        try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, TOC_CONFIG.ITEM_TITLE_SIZE); } catch (e) {}
+                        try { titleWidth = mixedTextWidth(truncatedTitle, TOC_CONFIG.ITEM_TITLE_SIZE, customFont, asciiFont); } catch (e) {}
                         
                         const minDotSpace = 20;
                         while (titleWidth > 0 && pageContentWidth > 0 && (titleWidth + pageNumWidth + minDotSpace > pageContentWidth) && truncatedTitle.length > 5) {
                             truncatedTitle = truncatedTitle.slice(0, -2) + '…';
-                            try { titleWidth = customFont.widthOfTextAtSize(truncatedTitle, TOC_CONFIG.ITEM_TITLE_SIZE); } catch (e) { titleWidth = 0; }
+                            try { titleWidth = mixedTextWidth(truncatedTitle, TOC_CONFIG.ITEM_TITLE_SIZE, customFont, asciiFont); } catch (e) { titleWidth = 0; }
                         }
                         
                         // 繪製標題
-                        tocPage.drawText(truncatedTitle, { 
-                            x: leftMargin, y: yPosition, 
-                            size: TOC_CONFIG.ITEM_TITLE_SIZE, font: customFont, color: rgb(0, 0, 0)
-                        });
+                        drawMixedText(tocPage, truncatedTitle, leftMargin, yPosition, TOC_CONFIG.ITEM_TITLE_SIZE, customFont, asciiFont, rgb(0, 0, 0));
                         
                         // 繪製頁碼
-                        tocPage.drawText(pageNumStr, { 
-                            x: tocPage.getWidth() - rightMargin - pageNumWidth, y: yPosition, 
-                            size: TOC_CONFIG.ITEM_PAGENUM_SIZE, font: customFont, color: rgb(0, 0, 0) 
-                        });
+                        drawMixedText(tocPage, pageNumStr, tocPage.getWidth() - rightMargin - pageNumWidth, yPosition, TOC_CONFIG.ITEM_PAGENUM_SIZE, customFont, asciiFont, rgb(0, 0, 0));
                         
                         // 繪製點點
                         let dotWidth = 0;
                         const dotSize = Math.min(TOC_CONFIG.ITEM_TITLE_SIZE, TOC_CONFIG.ITEM_PAGENUM_SIZE);
-                        try { dotWidth = customFont.widthOfTextAtSize('.', dotSize); } catch (e) {}
+                        try { dotWidth = asciiFont.widthOfTextAtSize('.', dotSize); } catch (e) {}
                         
                         if (dotWidth > 0) {
                             const dotStartX = leftMargin + titleWidth + 5;
@@ -1280,7 +1645,7 @@ window.onload = function() {
                                 const dotString = '.'.repeat(numDots);
                                 tocPage.drawText(dotString, { 
                                     x: dotStartX, y: yPosition, 
-                                    size: dotSize, font: customFont, color: rgb(0, 0, 0), opacity: 0.5 
+                                    size: dotSize, font: asciiFont, color: rgb(0, 0, 0), opacity: 0.5 
                                 });
                             }
                         }
@@ -1333,15 +1698,27 @@ window.onload = function() {
                         continue;
                     }
                     
-                    const [copiedPage] = await newPdf.copyPages(sourcePdf, [item.pageNum - 1]);
+                    // 行距調整：有文字層的頁面改用「文字重繪」，其餘沿用原樣複製
+                    const srcPageData = sourceFile.pages[item.pageNum - 1];
+                    const textItems = (srcPageData && srcPageData.textItems) || [];
+                    const useSpacing = spacingEnabled && textItems.length > 0;
 
-                    // ✅ [修正 1] 正確的旋轉處理邏輯 (使用 degrees)
-                    
-                    // 1. 取得原始頁面角度 (copyPages 會保留來源角度)
-                    const existingRotation = copiedPage.getRotation().angle;
+                    let newPage;
+                    let existingRotation = 0;
+                    if (useSpacing) {
+                        const srcPage = sourcePdf.getPage(item.pageNum - 1);
+                        newPage = renderTextPage(newPdf, srcPage, textItems, srcPageData.frameLines, customFont, asciiFont, spacingMult);
+                        existingRotation = srcPage.getRotation().angle;
+                    } else {
+                        const [copiedPage] = await newPdf.copyPages(sourcePdf, [item.pageNum - 1]);
 
-                    // 2. 先將頁面加入新的 PDF
-                    const newPage = newPdf.addPage(copiedPage);
+                        // ✅ [修正 1] 正確的旋轉處理邏輯 (使用 degrees)
+                        // 1. 取得原始頁面角度 (copyPages 會保留來源角度)
+                        existingRotation = copiedPage.getRotation().angle;
+
+                        // 2. 先將頁面加入新的 PDF
+                        newPage = newPdf.addPage(copiedPage);
+                    }
                     
                     // 3. 計算並應用新的總旋轉角度
                     const userRotation = item.rotation || 0;
@@ -1426,8 +1803,9 @@ window.onload = function() {
 
         } catch (error) {
             console.error('生成 PDF 時發生錯誤：', error);
-            progress.textContent = '❌ 生成失敗：' + error.message;
-            showNotification('❌ 生成失敗：' + error.message, 'error');
+            const errMsg = (error && error.message) ? error.message : String(error);
+            progress.textContent = '❌ 生成失敗：' + errMsg;
+            showNotification('❌ 生成失敗：' + errMsg, 'error');
             progress.classList.add('active', 'error');
             setTimeout(() => progress.classList.remove('active', 'error'), 8000);
         }
