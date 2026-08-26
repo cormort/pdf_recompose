@@ -656,16 +656,6 @@ input[type="file"] { display: none; }
 }
 .toc-field .toc-unit { font-size: 12px; color: #999; }
 .toc-field.toc-field-full { grid-column: 1 / -1; }
-.spacing-note {
-    margin-top: 10px;
-    font-size: 11px;
-    line-height: 1.6;
-    color: var(--gray-text);
-    background: #fff8e1;
-    border: 1px solid #f0d98c;
-    border-radius: 4px;
-    padding: 8px 10px;
-}
 .toc-reset-btn {
     margin-top: 12px;
     padding: 6px 16px;

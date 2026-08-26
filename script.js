@@ -65,8 +65,6 @@ window.onload = function() {
     const notification = document.getElementById('notification');
     const addTocCheckbox = document.getElementById('addTocCheckbox');
     const tocSettingsPanel = document.getElementById('tocSettingsPanel');
-    const addSpacingCheckbox = document.getElementById('addSpacingCheckbox');
-    const spacingSettingsPanel = document.getElementById('spacingSettingsPanel');
     const previewModal = document.getElementById('previewModal');
 
     // ------------------------------------------------------
@@ -163,11 +161,6 @@ window.onload = function() {
         tocSettingsPanel.style.display = this.checked ? 'block' : 'none';
     });
 
-    // 行距設定面板切換
-    addSpacingCheckbox.addEventListener('change', function() {
-        spacingSettingsPanel.style.display = this.checked ? 'block' : 'none';
-    });
-
     // ------------------------------------------------------
     // 6. 初始化執行 (Initialization)
     // ------------------------------------------------------
@@ -176,14 +169,11 @@ window.onload = function() {
 
     // 確保右側預設按鈕狀態正確
     setTargetViewMode(targetViewMode);
+    setTargetThumbnailSize(targetThumbnailSize);
 
     if (addTocCheckbox.checked) {
         tocSettingsPanel.style.display = 'block';
     }
-    if (addSpacingCheckbox.checked) {
-        spacingSettingsPanel.style.display = 'block';
-    }
-
     setupDragAndDrop(); // Sortable 綁在容器上，初始化一次即可
 
     // 左右面板寬度調整
@@ -376,13 +366,10 @@ window.onload = function() {
                             canvas.height = viewport.height;
                             await page.render({ canvasContext: context, viewport: viewport }).promise;
                             const info = await extractPageInfo(page, i);
-                            const frame = await extractPageFrame(page, page.getViewport({ scale: 1 }).height);
                             fileData.pages[i - 1] = { 
                                 pageNum: i, 
                                 canvas: canvas, 
                                 firstLine: info.title,
-                                textItems: info.items,
-                                frameLines: frame,
                                 isChecked: false, 
                                 sourceRotation: 0 
                             };
@@ -393,8 +380,6 @@ window.onload = function() {
                                 pageNum: i, 
                                 canvas: null, 
                                 firstLine: `Page ${i}`,
-                                textItems: [],
-                                frameLines: [],
                                 isChecked: false, 
                                 sourceRotation: 0 
                             };
@@ -519,94 +504,6 @@ window.onload = function() {
             if (cleanedTitle) title = cleanedTitle;
         }
         return title;
-    }
-
-    // 取頁面框線（水平/垂直直線段）— 移植自 pdf-row-shifter 的 getFrame + mergeLines。
-    // 座標統一為「頂部原點」（y 越小越靠頁頂），與文字抽取一致；t 為線寬(pt)。
-    async function extractPageFrame(page, H) {
-        try {
-            const ops = await page.getOperatorList();
-            const OPS = pdfjsLib.OPS;
-            const out = [];
-            // 路徑座標在目前的 CTM 之下，得自己追 transform / save / restore
-            // lw 預設 1（PDF 規格預設線寬）；明確寫 w 0 的 hairline 維持當 0.5 處理
-            let m = [1,0,0,1,0,0], stack = [], lw = 1;
-            const mul = (a,b) => [a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1],
-                                  a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3],
-                                  a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5]];
-            const app = (x,y) => [m[0]*x+m[2]*y+m[4], m[1]*x+m[3]*y+m[5]];
-            for (let i = 0; i < ops.fnArray.length; i++) {
-                const fn = ops.fnArray[i];
-                if (fn === OPS.save) { stack.push([m,lw]); continue; }          // 線寬也是圖形狀態，要跟著 q/Q 存回
-                if (fn === OPS.restore) { const s = stack.pop(); if (s) { m = s[0]; lw = s[1]; } continue; }
-                if (fn === OPS.transform) { m = mul(m, ops.argsArray[i]); continue; }
-                if (fn === OPS.setLineWidth) { lw = ops.argsArray[i][0]*Math.hypot(m[0],m[1]) || .5; continue; }
-                if (fn !== OPS.constructPath) continue;
-                const [cmds, raw] = ops.argsArray[i];
-                const co = [];
-                for (let j = 0; j < raw.length; j += 2) { const p = app(raw[j], raw[j+1]); co.push(p[0], p[1]); }
-                let k = 0, px = 0, py = 0;
-                for (const cm of cmds) {
-                    if (cm === OPS.moveTo) { px = co[k++]; py = co[k++]; }
-                    else if (cm === OPS.lineTo) {
-                        const x = co[k++], y = co[k++];
-                        if (Math.abs(y-py) < .5) out.push({x: Math.min(px,x), y: H-y, w: Math.abs(x-px), h: 0, t: lw});
-                        else if (Math.abs(x-px) < .5) out.push({x, y: H-Math.max(py,y), w: 0, h: Math.abs(y-py), t: lw});
-                        px = x; py = y;
-                    }
-                    else if (cm === OPS.rectangle) {
-                        const [x0,y0] = app(raw[k], raw[k+1]), [x1,y1] = app(raw[k]+raw[k+2], raw[k+1]+raw[k+3]);
-                        k += 4;
-                        const x = Math.min(x0,x1), w = Math.abs(x1-x0), tt = H-Math.max(y0,y1), h = Math.abs(y1-y0);
-                        px = x1; py = y1;
-                        // 長寬都大的是色塊（整頁底色），不是線；門檻 4pt
-                        if (Math.min(w,h) > 4) continue;
-                        // 扁矩形當線，厚度就是它的短邊
-                        if (h <= 4) out.push({x, y: tt+h/2, w, h: 0, t: h || .5});
-                        else out.push({x: x+w/2, y: tt, w: 0, h, t: w || .5});
-                        continue;
-                    }
-                    else k += cm === OPS.curveTo ? 6 : 2;
-                }
-            }
-            // 只留細長的框線，濾掉大色塊；再併掉厚度相接的同向線（天地線常是兩道細線相接）
-            return mergeFrameLines(out.filter(l => (l.w || l.h) > 2));
-        } catch (e) {
-            console.error('提取頁面框線失敗:', e);
-            return [];
-        }
-    }
-
-    // 併線：厚度相接／重疊且長度方向有交集的同向線併成一條（避免吸附時裂成兩條）
-    function mergeFrameLines(ls) {
-        const out = [];
-        for (const ori of [0, 1]) { // 0=水平 1=垂直
-            const g = ls.filter(l => (ori ? l.h : l.w) > 0).map(l => ({...l}));
-            const key = l => ori ? l.x : l.y;    // 粗細方向的中心
-            const t = l => l.t || .5;
-            g.sort((a,b) => key(a)-key(b));
-            const used = new Array(g.length).fill(false);
-            g.forEach((a,i) => {
-                if (used[i]) return;
-                let lo = key(a)-t(a)/2, hi = key(a)+t(a)/2;
-                let s = ori ? a.y : a.x, e = s + (ori ? a.h : a.w);
-                for (let j = i+1; j < g.length; j++) {
-                    const b = g[j]; if (used[j]) continue;
-                    const blo = key(b)-t(b)/2, bhi = key(b)+t(b)/2;
-                    if (blo > hi + .01) break;    // 已排序，再往後只會更遠
-                    const bs = ori ? b.y : b.x, be = bs + (ori ? b.h : b.w);
-                    if (be < s-.01 || bs > e+.01) continue;   // 長度方向沒交集
-                    // 只併「同一條線的兩半」：併起來不能比原本較長的那條更長
-                    if (Math.max(e,be)-Math.min(s,bs) > Math.max(e-s, be-bs)+1) continue;
-                    lo = Math.min(lo,blo); hi = Math.max(hi,bhi); s = Math.min(s,bs); e = Math.max(e,be);
-                    used[j] = true;
-                }
-                used[i] = true;
-                const c = (lo+hi)/2, th = hi-lo;
-                out.push(ori ? {x:c, y:s, w:0, h:e-s, t:th} : {x:s, y:c, w:e-s, h:0, t:th});
-            });
-        }
-        return out;
     }
 
     function updateFileList() {
@@ -1007,7 +904,7 @@ window.onload = function() {
     function setTargetThumbnailSize(size) {
         targetThumbnailSize = size;
         const container = document.getElementById('targetPanel');
-        container.classList.remove('size-small', 'size-medium', 'size-large');
+        container.classList.remove('size-small', 'size-medium', 'size-large', 'size-xlarge');
         container.classList.add(`size-${size}`);
         
         document.querySelectorAll('#target-size-toggle button').forEach(btn => btn.classList.remove('active'));
@@ -1131,6 +1028,7 @@ window.onload = function() {
             if (p.type !== 'divider') p.isChecked = checked;
         });
         syncTargetCheckDom();
+        updateTargetSelectedInfo();
     }
 
     // --- 批次操作 (Target) ---
@@ -1349,29 +1247,6 @@ window.onload = function() {
         if (previewModal.open) previewModal.close();
     }
 
-    // ======================================================
-    // === 邏輯區塊：行距重繪 (Line Spacing Re-render)
-    // ======================================================
-
-    // 分列：依 y 由小到大（頁頂→頁底），同行門檻 max(3, 半個字級)
-    // （移植自 pdf-row-shifter 的 lines()：中文與數字的基線常差數 pt，門檻跟字級走）
-    function buildLinesFromItems(items) {
-        const sorted = [...items].sort((a, b) => a.y - b.y);
-        const out = [];
-        let cur = null;
-        for (const it of sorted) {
-            const tol = Math.max(3, (cur ? Math.max(cur.sz, it.h) : it.h) * 0.5);
-            if (!cur || it.y - cur.y > tol) {
-                cur = { y: it.y, sz: it.h || 0, segs: [] };
-                out.push(cur);
-            } else {
-                cur.sz = Math.max(cur.sz, it.h || 0);
-            }
-            cur.segs.push(it);
-        }
-        return out.map(r => Object.assign(r.segs.sort((a, b) => a.x - b.x), { y: r.y }));
-    }
-
     // 混合字型繪製：ASCII 用 Helvetica（抽取正確），CJK 用思源黑體。
     // 原因：pdf-lib + fontkit 對 CJK 字型的 ASCII 子集化會產生錯誤 glyph 對映
     // （渲染正常，但搜尋/複製會得到亂碼），拆開用標準字型則完全正常。
@@ -1379,7 +1254,7 @@ window.onload = function() {
         const runs = [];
         let cur = null;
         for (const ch of text) {
-            const isAscii = ch.codePointAt(0) <= 0xFF;
+            const isAscii = ch.codePointAt(0) <= 0x7F;
             if (!cur || cur.ascii !== isAscii) {
                 cur = { ascii: isAscii, s: ch };
                 runs.push(cur);
@@ -1406,86 +1281,6 @@ window.onload = function() {
             cx += font.widthOfTextAtSize(run.s, size);
         }
         return cx - x; // 回傳總寬度
-    }
-
-    // 行距重繪：抽原文座標，以倍率重排行距後重畫（文字用思源黑體，表格框線一併重繪；
-    // 僅文字層頁面可用；圖片與其他繪圖不保留）
-    function renderTextPage(newPdf, srcPage, textItems, frameLines, cjkFont, asciiFont, mult) {
-        const { width, height } = srcPage.getSize();
-        const newPage = newPdf.addPage([width, height]);
-
-        const lines = buildLinesFromItems(textItems);
-        if (lines.length === 0) return newPage;
-
-        // 新列位置：頂列不動，其餘依「原列距 × 倍率」往頁底排（y 為頂部原點座標，往頁底為正）
-        const ys = [lines[0].y];
-        for (let i = 1; i < lines.length; i++) {
-            const gap = Math.max(lines[i].y - lines[i - 1].y, 1); // 原列距
-            ys.push(ys[i - 1] + gap * mult);
-        }
-
-        // 頁底防溢出：內容超出頁面可用區時，整體壓縮回 [頂列, 頁底留白] 之間
-        const marginBottom = 30;
-        const lastY = ys[ys.length - 1];
-        const bottomLimit = height - marginBottom;
-        if (lastY > bottomLimit) {
-            const topY = ys[0];
-            const available = bottomLimit - topY;
-            const needed = lastY - topY;
-            if (available > 0 && needed > available) {
-                const k = available / needed;
-                for (let i = 0; i < ys.length; i++) ys[i] = topY + (ys[i] - topY) * k;
-            }
-        }
-
-        // 原座標 → 新座標 的分段線性對映（頂列以上不動；最下列以下沿用最後一段斜率）
-        const origYs = lines.map(l => l.y);
-        const mapY = (y) => {
-            if (y <= origYs[0]) return y;
-            const n = origYs.length - 1;
-            if (y >= origYs[n]) {
-                const slope = (ys[n] - ys[n-1]) / Math.max(origYs[n] - origYs[n-1], 1);
-                return ys[n] + (y - origYs[n]) * slope;
-            }
-            for (let i = 1; i <= n; i++) {
-                if (y <= origYs[i]) {
-                    const t = (y - origYs[i-1]) / Math.max(origYs[i] - origYs[i-1], 1);
-                    return ys[i-1] + (ys[i] - ys[i-1]) * t;
-                }
-            }
-            return y;
-        };
-
-        // 先畫表格框線（水平線 y 對映；垂直線兩端 y 對映、x 不動）
-        for (const ln of (frameLines || [])) {
-            const thk = Math.max(ln.t || 0.5, 0.5);
-            const color = PDFLib.rgb(0, 0, 0);
-            if (ln.w > 0) {
-                const ny = mapY(ln.y);
-                newPage.drawLine({
-                    start: { x: ln.x, y: height - ny },
-                    end: { x: ln.x + ln.w, y: height - ny },
-                    thickness: thk, color: color,
-                });
-            } else if (ln.h > 0) {
-                const y1 = mapY(ln.y), y2 = mapY(ln.y + ln.h);
-                newPage.drawLine({
-                    start: { x: ln.x, y: height - y1 },
-                    end: { x: ln.x, y: height - y2 },
-                    thickness: thk, color: color,
-                });
-            }
-        }
-
-        // 再逐列重繪文字（y 轉回 bottom-origin 作為 pdf-lib 的基線）
-        for (let i = 0; i < lines.length; i++) {
-            const baseline = height - ys[i];
-            for (const seg of lines[i]) {
-                const size = Math.max(4, seg.h || 10);
-                drawMixedText(newPage, seg.s, seg.x, baseline, size, cjkFont, asciiFont, PDFLib.rgb(0, 0, 0));
-            }
-        }
-        return newPage;
     }
 
     async function generatePDF() {
@@ -1531,8 +1326,6 @@ window.onload = function() {
                 customFont = await newPdf.embedFont(fontBytes);
                 // ASCII 用標準字型（pdf-lib 對 CJK 字型的 ASCII 子集化會產生錯誤 glyph 對映）
                 asciiFont = await newPdf.embedFont(StandardFonts.Helvetica);
-                progress.textContent = '中文字型載入成功!';
-                await new Promise(resolve => setTimeout(resolve, 500));
             } catch (fontError) {
                 console.error("中文字型載入失敗:", fontError);
                 showNotification(`警告：無法載入本地字型。目錄將使用英文字型。`, 'error');
@@ -1550,8 +1343,6 @@ window.onload = function() {
             
             const addToc = addTocCheckbox.checked;
             const addPageNumbers = document.getElementById('addPageNumbersCheckbox').checked;
-            const spacingEnabled = addSpacingCheckbox.checked;
-            const spacingMult = Math.min(2, Math.max(0.5, parseFloat(document.getElementById('spacingMultiplier').value) || 1));
             
             let tocPages = []; 
             let tocLinkData = []; 
@@ -1580,10 +1371,7 @@ window.onload = function() {
                 let tocPage = newPdf.addPage([842, 595]); // 橫向A4
                 tocPages.push(tocPage);
                 
-                tocPage.drawText('目錄', { 
-                    x: 50, y: 595 - 50, 
-                    size: TOC_CONFIG.MAIN_TITLE_SIZE, font: customFont, color: rgb(0,0,0) 
-                });
+                drawMixedText(tocPage, '目錄', 50, 595 - 50, TOC_CONFIG.MAIN_TITLE_SIZE, customFont, asciiFont, rgb(0, 0, 0));
                 
                 let yPosition = 595 - 90;
                 let pageCounterForToc = 0;
@@ -1698,37 +1486,15 @@ window.onload = function() {
                         continue;
                     }
                     
-                    // 行距調整：有文字層的頁面改用「文字重繪」，其餘沿用原樣複製
-                    const srcPageData = sourceFile.pages[item.pageNum - 1];
-                    const textItems = (srcPageData && srcPageData.textItems) || [];
-                    const useSpacing = spacingEnabled && textItems.length > 0;
-
-                    let newPage;
-                    let existingRotation = 0;
-                    if (useSpacing) {
-                        const srcPage = sourcePdf.getPage(item.pageNum - 1);
-                        newPage = renderTextPage(newPdf, srcPage, textItems, srcPageData.frameLines, customFont, asciiFont, spacingMult);
-                        existingRotation = srcPage.getRotation().angle;
-                    } else {
-                        const [copiedPage] = await newPdf.copyPages(sourcePdf, [item.pageNum - 1]);
-
-                        // ✅ [修正 1] 正確的旋轉處理邏輯 (使用 degrees)
-                        // 1. 取得原始頁面角度 (copyPages 會保留來源角度)
-                        existingRotation = copiedPage.getRotation().angle;
-
-                        // 2. 先將頁面加入新的 PDF
-                        newPage = newPdf.addPage(copiedPage);
-                    }
+                    const [copiedPage] = await newPdf.copyPages(sourcePdf, [item.pageNum - 1]);
+                    // copyPages 會保留來源角度，疊加使用者旋轉
+                    const existingRotation = copiedPage.getRotation().angle;
+                    const newPage = newPdf.addPage(copiedPage);
                     
-                    // 3. 計算並應用新的總旋轉角度
                     const userRotation = item.rotation || 0;
                     const totalRotation = (existingRotation + userRotation) % 360;
                     
-                    if (totalRotation !== 0) {
-                         newPage.setRotation(degrees(totalRotation));
-                    } else {
-                         newPage.setRotation(degrees(0));
-                    }
+                    newPage.setRotation(degrees(totalRotation));
 
                     // 新增頁碼
                     if (addPageNumbers) {
