@@ -1,113 +1,172 @@
 /* =========================================
-   0. 設計 Token (Design Tokens)
+   0. 設計 Token — HeroUI 風格
+   (色階 / 圓角 / 陰影對齊 heroui.com 預設主題)
    ========================================= */
 :root {
-    --navy: #2c3e50;          /* 側邊欄背景 / 標題文字 */
-    --navy-2: #34495e;        /* 側邊欄次要元件 */
-    --navy-3: #3d566e;        /* 側邊欄 hover */
-    --blue: #3498db;          /* 主色 */
-    --blue-dark: #2980b9;
-    --green: #27ae60;         /* 成功 / 新增 */
-    --green-dark: #229954;
-    --red: #e74c3c;           /* 危險 / 刪除 */
-    --red-dark: #c0392b;
-    --orange: #e67e22;        /* 警告 */
-    --orange-dark: #d35400;
-    --yellow: #f39c12;        /* 旋轉 */
-    --teal: #16a085;          /* 新增小節 */
-    --teal-dark: #117a65;
-    --purple: #9b59b6;        /* 編輯目錄 */
-    --purple-dark: #8e44ad;
-    --gray-bg: #ecf0f1;       /* 面板背景 */
-    --gray-border: #bdc3c7;   /* 邊框 / 分隔 */
-    --gray-text: #7f8c8d;     /* 次要文字 */
-    --gray-text-light: #95a5a6;
-    --surface: #ffffff;
-    --surface-alt: #f8f9fa;
-    --radius: 8px;
-    --shadow: 0 2px 5px rgba(0,0,0,0.1);
+    /* HeroUI semantic colors */
+    --primary: #006FEE;
+    --primary-600: #005BC4;
+    --primary-100: #CCE3FD;
+    --primary-50: #E6F1FE;
+    --success: #17C964;
+    --success-600: #12A150;
+    --success-50: #E8FAF0;
+    --warning: #F5A524;
+    --warning-600: #C4841D;
+    --danger: #F31260;
+    --danger-600: #C20E4D;
+    --secondary: #7828C8;
+    --secondary-600: #6020A0;
+
+    /* HeroUI neutral (zinc) scale */
+    --default-50: #FAFAFA;
+    --default-100: #F4F4F5;
+    --default-200: #E4E4E7;
+    --default-300: #D4D4D8;
+    --default-400: #A1A1AA;
+    --default-500: #71717A;
+    --default-700: #3F3F46;
+    --default-900: #18181B;
+
+    --content1: #FFFFFF;   /* 卡片 */
+    --content2: #F4F4F5;   /* 面板底 */
+    --foreground: #11181C;
+    --foreground-muted: #71717A;
+
+    /* 暗色側邊欄（HeroUI dark content1/2） */
+    --dark-bg: #18181B;
+    --dark-2: #27272A;
+    --dark-3: #3F3F46;
+    --dark-fg: #ECEDEE;
+
+    /* 舊變數別名，維持相容 */
+    --navy: var(--dark-bg);
+    --navy-2: var(--dark-2);
+    --navy-3: var(--dark-3);
+    --blue: var(--primary);
+    --blue-dark: var(--primary-600);
+    --green: var(--success);
+    --green-dark: var(--success-600);
+    --red: var(--danger);
+    --red-dark: var(--danger-600);
+    --orange: var(--warning);
+    --orange-dark: var(--warning-600);
+    --yellow: var(--warning);
+    --teal: var(--success-600);
+    --teal-dark: #0E793C;
+    --purple: var(--secondary);
+    --purple-dark: var(--secondary-600);
+    --gray-bg: var(--content2);
+    --gray-border: var(--default-200);
+    --gray-text: var(--default-500);
+    --gray-text-light: var(--default-400);
+    --surface: var(--content1);
+    --surface-alt: var(--default-50);
+
+    /* HeroUI radius / shadow */
+    --radius-sm: 8px;
+    --radius: 12px;
+    --radius-lg: 14px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+    --shadow: 0 4px 12px rgba(0,0,0,.06), 0 2px 4px rgba(0,0,0,.04);
+    --shadow-md: 0 10px 24px rgba(0,0,0,.08), 0 4px 8px rgba(0,0,0,.04);
+    --ease: cubic-bezier(.4,0,.2,1);
 }
 
 /* =========================================
-   1. 全域設定與基礎佈局 (Global & Layout)
+   1. 全域設定與基礎佈局
    ========================================= */
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-}
+* { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-    font-family: 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', 'Heiti TC', sans-serif;
+    font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                 'PingFang TC', 'Noto Sans TC', 'Microsoft JhengHei', sans-serif;
+    font-size: 14px;
+    color: var(--foreground);
+    background: var(--default-50);
     height: 100vh;
     overflow: hidden;
     display: flex;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* HeroUI focus ring */
+:where(button, input, select, textarea, a):focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
 }
 
 /* 側邊欄 */
 .sidebar {
     width: 320px;
-    background: var(--navy);
-    color: white;
+    background: var(--dark-bg);
+    color: var(--dark-fg);
     padding: 20px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 20px;
-    position: relative; /* 讓 #notification 的 absolute 定位錨定在側邊欄內 */
+    gap: 18px;
+    position: relative;
+    border-right: 1px solid var(--dark-2);
 }
 
 .sidebar h2 {
-    font-size: 20px;
-    margin-bottom: 10px;
-    color: var(--gray-bg);
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin-bottom: 8px;
+    color: var(--dark-fg);
 }
 
 /* 主內容區 */
 .main-content {
     flex: 1;
     display: flex;
-    gap: 20px;
-    padding: 20px;
+    gap: 16px;
+    padding: 16px;
     overflow: hidden;
 }
 
-/* 面板通用樣式：工具列固定，只有頁面清單捲動 */
+/* 面板 = HeroUI Card */
 .source-panel, .target-panel {
     flex: 1;
     min-width: 0;
-    background: var(--gray-bg);
-    border-radius: 8px;
-    padding: 20px;
+    background: var(--content1);
+    border: 1px solid var(--default-200);
+    border-radius: var(--radius-lg);
+    padding: 16px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    box-shadow: var(--shadow-sm);
 }
 
-#sourcePages, #selectedPages {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-}
+#sourcePages, #selectedPages { flex: 1; min-height: 0; overflow-y: auto; }
 
-/* 左右面板寬度調整分隔條 */
+/* 捲軸 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--default-300); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: var(--default-400); }
+::-webkit-scrollbar-track { background: transparent; }
+
 .panel-resizer {
     width: 6px;
     flex-shrink: 0;
     cursor: col-resize;
-    border-radius: 3px;
-    background: var(--gray-border);
-    transition: background 0.2s;
+    border-radius: 999px;
+    background: var(--default-200);
+    transition: background .2s var(--ease);
 }
-.panel-resizer:hover, .panel-resizer.dragging { background: var(--blue); }
+.panel-resizer:hover, .panel-resizer.dragging { background: var(--primary); }
 
 .panel-title {
-    font-size: 18px;
-    font-weight: bold;
-    color: var(--navy);
-    margin-bottom: 15px;
-    padding-bottom: 10px;
-    border-bottom: 2px solid var(--blue);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--foreground);
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--default-200);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -115,277 +174,260 @@ body {
     gap: 10px;
 }
 
-.panel-controls {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-}
+.panel-controls { display: flex; gap: 8px; align-items: center; }
 
 /* =========================================
-   2. 通用元件 (Components)
+   2. 通用元件
    ========================================= */
 
-/* 上傳區塊 */
 .upload-area {
-    border: 2px dashed var(--blue);
-    border-radius: 8px;
-    padding: 30px;
+    border: 1.5px dashed var(--dark-3);
+    border-radius: var(--radius);
+    padding: 26px 20px;
     text-align: center;
     cursor: pointer;
-    transition: all 0.3s;
-    background: var(--navy-2);
+    transition: all .25s var(--ease);
+    background: var(--dark-2);
 }
-
-.upload-area:hover {
-    background: var(--navy-3);
-    border-color: #5dade2;
-}
-
-.upload-area .upload-or {
-    font-size: 12px;
-    color: var(--gray-border);
-    margin-bottom: 15px;
-}
-
+.upload-area:hover { background: var(--dark-3); border-color: var(--primary); }
+.upload-area .upload-or { font-size: 12px; color: var(--default-400); margin: 8px 0 12px; }
 .upload-area.drag-over {
-    background: var(--navy-3);
-    border-color: #5dade2;
-    transform: scale(1.02);
+    background: var(--dark-3);
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--primary-50);
 }
 
-/* 切換按鈕群組 (Toggle Group) */
+/* Toggle Group = HeroUI Tabs */
 .toggle-group {
-    display: flex;
-    gap: 5px;
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    background: var(--default-100);
+    border-radius: var(--radius-sm);
 }
-
 .toggle-group button {
-    padding: 5px 10px;
-    border: 1px solid var(--blue);
-    background: white;
-    color: var(--blue);
-    border-radius: 3px;
+    padding: 4px 10px;
+    border: none;
+    background: transparent;
+    color: var(--default-500);
+    border-radius: 6px;
     cursor: pointer;
     font-size: 12px;
-    transition: all 0.3s;
+    font-weight: 500;
+    transition: all .2s var(--ease);
 }
-
+.toggle-group button:hover { color: var(--foreground); }
 .toggle-group button.active {
-    background: var(--blue);
-    color: white;
+    background: var(--content1);
+    color: var(--foreground);
+    box-shadow: var(--shadow-sm);
 }
 
-/* 進度條與提示 */
+/* 進度 / 提示 */
 .progress {
     display: none;
-    background: var(--navy-2);
-    padding: 15px;
-    border-radius: 5px;
+    background: var(--dark-2);
+    padding: 12px;
+    border-radius: var(--radius-sm);
     text-align: center;
-    color: white;
-    font-weight: bold;
+    color: var(--dark-fg);
+    font-weight: 500;
+    font-size: 13px;
 }
 .progress.active { display: block; }
-.progress.error { background: var(--red); }
-.progress.success { background: var(--green); }
+.progress.error { background: var(--danger); color: #fff; }
+.progress.success { background: var(--success); color: #fff; }
 
 .note {
-    background: var(--navy-2);
-    padding: 10px;
-    border-radius: 5px;
+    background: var(--dark-2);
+    padding: 12px;
+    border-radius: var(--radius-sm);
     font-size: 12px;
-    line-height: 1.5;
-    color: var(--gray-border);
+    line-height: 1.6;
+    color: var(--default-400);
 }
 
 /* =========================================
-   3. 按鈕樣式 (Buttons)
+   3. 按鈕 (HeroUI Button)
    ========================================= */
-
-/* 通用按鈕 */
 .btn {
-    padding: 10px 20px;
+    padding: 0 16px;
+    height: 40px;
     border: none;
-    border-radius: 5px;
+    border-radius: var(--radius);
     cursor: pointer;
     font-size: 14px;
-    transition: all 0.3s;
-    font-weight: bold;
+    font-weight: 500;
+    transition: transform .1s var(--ease), background-color .2s var(--ease), opacity .2s var(--ease);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
 }
+.btn:active { transform: scale(.97); }
 
-.btn-primary { background: var(--blue); color: white; }
-.btn-primary:hover { background: var(--blue-dark); }
+.btn-primary { background: var(--primary); color: #fff; box-shadow: 0 2px 8px rgba(0,111,238,.25); }
+.btn-primary:hover { background: var(--primary-600); }
 
-.btn-success { background: var(--green); color: white; width: 100%; padding: 15px; font-size: 16px; }
-.btn-success:hover { background: var(--green-dark); }
+.btn-success {
+    background: var(--success); color: #fff; width: 100%; height: 48px; font-size: 15px; font-weight: 600;
+    box-shadow: 0 2px 10px rgba(23,201,100,.3);
+}
+.btn-success:hover { background: var(--success-600); }
 
-.btn-warning { background: var(--orange); color: white; width: 100%; padding: 10px; font-size: 14px; position: relative; }
-.btn-warning:hover { background: var(--orange-dark); }
-.btn-warning.confirm-mode { background: var(--red-dark); }
+.btn-warning { background: var(--warning); color: #fff; width: 100%; }
+.btn-warning:hover { background: var(--warning-600); }
+.btn-warning.confirm-mode { background: var(--danger-600); }
 .btn-warning.confirm-mode::after { content: ' (再次點擊確認)'; font-size: 11px; }
 
-.btn-danger { background: var(--red); color: white; padding: 5px 10px; font-size: 12px; }
-.btn-danger:hover { background: var(--red-dark); }
+.btn-danger { background: var(--danger); color: #fff; height: 32px; padding: 0 12px; font-size: 12px; }
+.btn-danger:hover { background: var(--danger-600); }
 
-/* 批次操作工具列按鈕通用設定 */
+/* 工具列小按鈕 = HeroUI flat/solid size-sm */
 .batch-btn-row .btn-batch,
 .batch-btn-row .btn-panel-action,
-.btn-batch, 
+.btn-batch,
 .btn-panel-action {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    height: 32px; /* 強制統一高度 */
-    padding: 0 10px;
-    font-size: 13px;
-    border-radius: 4px;
+    height: 32px;
+    padding: 0 12px;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: var(--radius-sm);
     border: none;
     cursor: pointer;
-    color: white;
+    color: #fff;
     white-space: nowrap;
-    transition: opacity 0.2s, background-color 0.2s;
+    transition: opacity .2s var(--ease), background-color .2s var(--ease), transform .1s var(--ease);
 }
+.btn-batch:hover, .btn-panel-action:hover { opacity: .88; }
+.btn-batch:active, .btn-panel-action:active { transform: scale(.97); }
 
-.btn-batch:hover, .btn-panel-action:hover { opacity: 0.9; }
+/* 旋轉：HeroUI flat default（淺底深字） */
+.btn-rotate-left, .btn-rotate-right { background: var(--default-100); color: var(--default-700); }
+.btn-rotate-left:hover, .btn-rotate-right:hover { background: var(--default-200); opacity: 1; }
 
-/* 特定功能按鈕顏色 */
-.btn-rotate-left, .btn-rotate-right { background-color: var(--yellow); }
-.btn-add { background-color: var(--green); }
-.btn-delete { background-color: var(--red-dark); }
+.btn-add { background: var(--success); }
+.btn-delete { background: var(--danger); }
+.btn-add-section { background: var(--success-600); }
+.btn-add-section:hover { background: var(--teal-dark); }
+.btn-edit { background: var(--secondary); }
+.btn-edit:hover { background: var(--secondary-600); }
+.btn-edit.active { background: var(--success); }
+.btn-clear { background: var(--danger); }
+.btn-clear:hover { background: var(--danger-600); }
+.btn-clear.confirm-mode { background: var(--danger-600); }
 
-.btn-add-section { background-color: var(--teal); }
-.btn-add-section:hover { background-color: var(--teal-dark); }
-
-.btn-edit { background-color: var(--purple); }
-.btn-edit:hover { background-color: var(--purple-dark); }
-.btn-edit.active { background: var(--green); }
-
-.btn-clear { background-color: var(--red); }
-.btn-clear:hover { background-color: var(--red-dark); }
-.btn-clear.confirm-mode { background: var(--red-dark); }
-
-/* 智慧勾選按鈕 */
 .btn-qs-action {
-    background: var(--blue); /* 統一用藍色或 #1abc9c 青綠色 */
-    color: white;
+    background: var(--primary);
+    color: #fff;
     border: none;
-    border-radius: 4px;
-    padding: 6px 12px;
-    font-size: 13px;
-    font-weight: bold;
+    border-radius: var(--radius-sm);
+    height: 32px;
+    padding: 0 14px;
+    font-size: 12px;
+    font-weight: 500;
     cursor: pointer;
-    transition: background 0.2s;
+    transition: background .2s var(--ease);
     white-space: nowrap;
 }
-.btn-qs-action:hover { background: var(--blue-dark); }
+.btn-qs-action:hover { background: var(--primary-600); }
 
 /* =========================================
-   4. 工具列樣式 (Toolbars)
+   4. 工具列
    ========================================= */
-
-/* 第一層：智慧勾選工具列 */
 .quick-select-toolbar {
-    background: #eef2f3;
-    padding: 10px 15px;
-    border-bottom: 1px solid #dcdcdc;
+    background: var(--default-50);
+    border: 1px solid var(--default-200);
+    border-radius: var(--radius);
+    padding: 8px 12px;
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-bottom: 0;
+    gap: 8px;
+    margin-bottom: 8px;
 }
 
-.qs-label {
-    font-size: 14px;
-    font-weight: bold;
-    color: var(--navy);
-    white-space: nowrap;
-}
+.qs-label { font-size: 12px; font-weight: 600; color: var(--default-500); white-space: nowrap; }
 
+/* HeroUI Select (variant=flat) */
 .qs-select {
-    padding: 6px 10px;
-    border: 1px solid var(--gray-border);
-    border-radius: 4px;
-    background: white;
-    color: var(--navy);
+    height: 32px;
+    padding: 0 10px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--default-100);
+    color: var(--foreground);
     font-size: 13px;
     flex: 1;
     max-width: 200px;
     cursor: pointer;
+    transition: background .2s var(--ease);
 }
-.qs-select:focus { outline: none; border-color: var(--blue); }
+.qs-select:hover { background: var(--default-200); }
 
-/* 第二層：批次操作工具列 */
 .batch-toolbar {
-    background: var(--gray-bg);
-    border-bottom: 2px solid var(--gray-border);
-    padding: 10px 15px;
+    background: var(--content1);
+    border: 1px solid var(--default-200);
+    border-radius: var(--radius);
+    padding: 8px 12px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     flex-wrap: wrap;
     gap: 10px;
-    margin-bottom: 10px;
-    border-radius: 4px;
+    margin-bottom: 12px;
 }
 
-.batch-select-group {
-    display: flex;
-    align-items: center;
-}
+.batch-select-group { display: flex; align-items: center; }
 
 .checkbox-label {
-    font-weight: bold;
-    color: var(--navy);
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--foreground);
     cursor: pointer;
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
 }
 
-/* 工具列右側按鈕群組排版 */
-.batch-btn-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
+.batch-btn-row { display: flex; align-items: center; gap: 6px; }
+.batch-btn-group { display: flex; gap: 4px; }
 
-.batch-btn-group {
-    display: flex;
-    gap: 5px;
-}
-
-/* 垂直分隔線 */
 .toolbar-separator {
-    width: 2px;
-    height: 24px;
-    background-color: var(--gray-border);
+    width: 1px;
+    height: 20px;
+    background: var(--default-200);
     margin: 0 4px;
 }
 
-/* =========================================
-   5. 左側：來源檔案與頁面 (Source Panel)
-   ========================================= */
+input[type="checkbox"] { accent-color: var(--primary); }
 
-/* 檔案列表 */
-.file-list { list-style: none; }
+/* =========================================
+   5. 左側：來源檔案與頁面
+   ========================================= */
+.file-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
 .file-list-item {
-    background: var(--navy-2);
-    padding: 8px 12px;
-    margin-bottom: 5px;
-    border-radius: 5px;
+    background: var(--dark-2);
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
     font-size: 13px;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    transition: background .2s var(--ease);
 }
+.file-list-item:hover { background: var(--dark-3); }
 input[type="file"] { display: none; }
 
 .pdf-file {
-    background: white;
-    border-radius: 8px;
-    padding: 15px;
-    margin-bottom: 15px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    background: var(--content1);
+    border: 1px solid var(--default-200);
+    border-radius: var(--radius);
+    padding: 14px;
+    margin-bottom: 12px;
+    box-shadow: var(--shadow-sm);
 }
 
 .pdf-file-header {
@@ -394,210 +436,199 @@ input[type="file"] { display: none; }
     align-items: center;
     margin-bottom: 10px;
 }
-.pdf-file-name { font-weight: bold; color: var(--navy); flex: 1; }
+.pdf-file-name { font-weight: 600; font-size: 13px; color: var(--foreground); flex: 1; }
 
-/* 來源頁面 - Checkbox 樣式 */
 .page-checkbox {
     width: 18px;
     height: 18px;
     cursor: pointer;
-    accent-color: var(--blue-dark);
+    accent-color: var(--primary);
     z-index: 20;
 }
 
-/* 來源頁面 - Grid View */
-.pages-grid {
-    display: grid;
-    gap: 10px;
-    margin-top: 10px;
-    transition: grid-template-columns 0.3s;
-}
-
-/* 響應式 Grid 大小控制 */
+.pages-grid { display: grid; gap: 10px; margin-top: 8px; transition: grid-template-columns .3s var(--ease); }
 .source-panel.size-medium .pages-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
 .source-panel.size-small .pages-grid { grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); }
 .source-panel.size-large .pages-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
 .source-panel.size-xlarge .pages-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
 
 .page-item {
-    border: 2px solid var(--gray-border);
-    border-radius: 5px;
-    padding: 5px;
+    border: 1px solid var(--default-200);
+    border-radius: var(--radius);
+    padding: 6px;
     cursor: pointer;
-    transition: all 0.3s;
-    background: white;
+    transition: all .2s var(--ease);
+    background: var(--content1);
     position: relative;
 }
 .page-item:hover {
-    border-color: var(--blue);
+    border-color: var(--default-300);
     transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    box-shadow: var(--shadow-md);
 }
 .page-item.checked {
-    border-color: var(--blue-dark);
-    background-color: #eaf2f8;
-    box-shadow: 0 0 8px rgba(41, 128, 185, 0.5);
+    border-color: var(--primary);
+    background: var(--primary-50);
+    box-shadow: 0 0 0 3px var(--primary-100);
 }
 
-.page-item .page-checkbox {
-    position: absolute;
-    top: 8px;
-    left: 8px;
-    transform: scale(1.2);
-}
+.page-item .page-checkbox { position: absolute; top: 8px; left: 8px; transform: scale(1.15); }
+.page-item canvas { width: 100%; display: block; border-radius: var(--radius-sm); }
+.page-number { text-align: center; font-size: 11px; color: var(--default-500); margin-top: 6px; }
 
-.page-item canvas { width: 100%; display: block; border-radius: 3px; }
-.page-number { text-align: center; font-size: 12px; color: var(--gray-text); margin-top: 5px; }
-
-/* 來源頁面 - List View */
-.pages-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.pages-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 
 .page-list-item {
-    border: 2px solid var(--gray-border);
-    border-radius: 5px;
+    border: 1px solid var(--default-200);
+    border-radius: var(--radius);
     padding: 10px;
     cursor: pointer;
-    transition: all 0.3s;
-    background: white;
+    transition: all .2s var(--ease);
+    background: var(--content1);
     display: flex;
     justify-content: space-between;
     align-items: center;
     position: relative;
     gap: 10px;
 }
-.page-list-item:hover { border-color: var(--blue); box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-.page-list-item.checked { border-color: var(--blue-dark); background-color: #eaf2f8; }
+.page-list-item:hover { border-color: var(--default-300); box-shadow: var(--shadow-sm); }
+.page-list-item.checked { border-color: var(--primary); background: var(--primary-50); }
 
-.page-list-item .page-checkbox { position: static; transform: scale(1.2); margin-right: 10px; }
-.page-list-item .list-thumb-wrapper {
-    width: 30px; display: flex; justify-content: center; margin-right: 10px;
-}
+.page-list-item .page-checkbox { position: static; transform: scale(1.15); margin-right: 10px; }
+.page-list-item .list-thumb-wrapper { width: 30px; display: flex; justify-content: center; margin-right: 10px; }
 .page-list-text {
-    flex: 1; font-size: 14px; color: var(--navy);
+    flex: 1; font-size: 13px; color: var(--foreground);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 10px;
 }
+/* HeroUI Chip */
 .page-list-number {
-    font-size: 12px; color: var(--gray-text); background: var(--gray-bg);
-    padding: 2px 8px; border-radius: 3px; white-space: nowrap;
+    font-size: 11px; color: var(--default-500); background: var(--default-100);
+    padding: 3px 8px; border-radius: 999px; white-space: nowrap;
 }
 
-/* 舊的單一刪除按鈕 (隱藏中，因為改用批次操作) */
 .page-item .delete-btn, .page-list-item .delete-btn { display: none !important; }
 
 /* =========================================
-   6. 右側：成品頁面 (Target Panel)
+   6. 右側：成品頁面
    ========================================= */
+.selected-pages { display: flex; flex-direction: column; gap: 8px; }
 
-.selected-pages { display: flex; flex-direction: column; gap: 10px; }
-
-/* Grid View 設定 */
 .selected-pages.grid-view {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); 
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
     gap: 10px;
-    padding: 10px 0;
+    padding: 4px 0;
 }
 .target-panel.size-small .selected-pages.grid-view { grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); }
 .target-panel.size-large .selected-pages.grid-view { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+.target-panel.size-xlarge .selected-pages.grid-view { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
 
 .selected-page-item.grid-item {
-    border: 2px solid var(--gray-border);
-    border-radius: 5px;
-    background: white;
-    padding: 5px;
+    border: 1px solid var(--default-200);
+    border-radius: var(--radius);
+    background: var(--content1);
+    padding: 6px;
     position: relative;
     cursor: move;
     display: flex;
     flex-direction: column;
     align-items: center;
     min-height: 140px;
+    transition: all .2s var(--ease);
 }
-.selected-page-item.grid-item:hover { border-color: var(--blue); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-.selected-page-item.grid-item.checked { border-color: var(--green); background: #eafaf1; }
+.selected-page-item.grid-item:hover { border-color: var(--default-300); box-shadow: var(--shadow-md); }
+.selected-page-item.grid-item.checked {
+    border-color: var(--success);
+    background: var(--success-50);
+    box-shadow: 0 0 0 3px rgba(23,201,100,.18);
+}
 
 .grid-item .canvas-wrapper {
     width: 100%; flex: 1; display: flex; align-items: center;
-    justify-content: center; overflow: hidden; margin-bottom: 5px;
+    justify-content: center; overflow: hidden; margin-bottom: 6px;
 }
-.grid-item canvas { max-width: 100%; max-height: 120px; object-fit: contain; }
+.grid-item canvas { max-width: 100%; max-height: 120px; object-fit: contain; border-radius: 6px; }
 
 .page-num-badge {
-    position: absolute; bottom: 5px; left: 5px;
-    background: rgba(0,0,0,0.5); color: white;
-    font-size: 10px; padding: 2px 6px; border-radius: 10px;
+    position: absolute; bottom: 6px; left: 6px;
+    background: rgba(24,24,27,.72); color: #fff;
+    font-size: 10px; padding: 2px 8px; border-radius: 999px;
+    backdrop-filter: blur(4px);
 }
 .page-title-grid {
-    font-size: 11px; color: #333; width: 100%;
-    text-align: center; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis;
+    font-size: 11px; color: var(--default-500); width: 100%;
+    text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* List View 設定 */
-.selected-pages.list-view { display: flex; flex-direction: column; gap: 8px; }
+.selected-pages.list-view { display: flex; flex-direction: column; gap: 6px; }
 
 .selected-page-item.list-item {
     display: flex; align-items: center; gap: 10px;
-    padding: 8px; border: 1px solid #ddd; background: white;
-    width: 100%; margin-bottom: 5px;
+    padding: 10px;
+    border: 1px solid var(--default-200);
+    border-radius: var(--radius);
+    background: var(--content1);
+    width: 100%; margin-bottom: 0;
+    transition: all .2s var(--ease);
 }
-.list-item .page-checkbox { margin-right: 10px; }
+.selected-page-item.list-item:hover { border-color: var(--default-300); box-shadow: var(--shadow-sm); }
+.selected-page-item.list-item.checked { border-color: var(--success); background: var(--success-50); }
+.list-item .page-checkbox { margin-right: 8px; }
 .list-item .list-thumb-wrapper {
     width: 40px; height: 50px; display: flex;
     align-items: center; justify-content: center;
-    overflow: hidden; background: #eee; margin-right: 10px;
+    overflow: hidden; background: var(--default-100);
+    border-radius: 6px; margin-right: 10px;
 }
 .list-item canvas { max-width: 100%; max-height: 100%; }
 
-/* 分隔線/小節 (Divider) */
+/* 小節分隔 */
 .selected-divider-item {
-    background: #d5f5e3;
-    border: 2px dashed var(--green);
-    border-radius: 5px;
-    padding: 10px;
+    background: var(--success-50);
+    border: 1px dashed var(--success);
+    border-radius: var(--radius);
+    padding: 10px 12px;
     display: flex; gap: 10px; align-items: center;
-    cursor: move; text-align: center;
-    width: 100%; margin-bottom: 5px;
+    cursor: move;
+    width: 100%; margin-bottom: 0;
 }
-.grid-view .selected-divider-item { grid-column: 1 / -1; margin: 10px 0; }
+.grid-view .selected-divider-item { grid-column: 1 / -1; margin: 6px 0; }
+.selected-divider-title { flex: 1; font-weight: 600; font-size: 13px; color: var(--success-600); }
 
-.selected-divider-title { flex: 1; font-weight: bold; color: #145a32; }
+.drag-handle { cursor: move; color: var(--default-400); font-size: 16px; margin-right: 8px; }
+.selected-page-item.dragging, .selected-divider-item.dragging {
+    opacity: .5; border: 1px dashed var(--primary);
+}
 
-/* 通用拖曳樣式 */
-.drag-handle { cursor: move; color: var(--gray-text); font-size: 18px; margin-right: 10px; }
-.selected-page-item.dragging, .selected-divider-item.dragging { opacity: 0.5; border: 2px dashed var(--blue); }
-
-/* 資訊文字區塊 */
 .selected-page-info { flex: 1; min-width: 0; }
-.selected-page-title { font-weight: bold; color: var(--navy); margin-bottom: 5px; padding: 4px 0; }
-.selected-page-source { font-size: 12px; color: var(--gray-text); }
+.selected-page-title { font-weight: 500; font-size: 13px; color: var(--foreground); margin-bottom: 4px; padding: 2px 0; }
+.selected-page-source { font-size: 12px; color: var(--default-500); }
 
-.empty-message { text-align: center; color: var(--gray-text-light); padding: 40px; font-size: 14px; }
-.empty-message .empty-icon { font-size: 40px; display: block; margin-bottom: 12px; }
-.empty-message .empty-hint { font-size: 12px; color: var(--gray-text-light); margin-top: 6px; line-height: 1.6; }
+.empty-message { text-align: center; color: var(--default-400); padding: 48px 20px; font-size: 14px; }
+.empty-message .empty-icon { font-size: 40px; display: block; margin-bottom: 12px; opacity: .6; }
+.empty-message .empty-hint { font-size: 12px; color: var(--default-400); margin-top: 6px; line-height: 1.6; }
 
 /* =========================================
-   7.5 側邊欄動作區與選項卡 (Sidebar Actions)
+   7. 側邊欄動作區與選項卡
    ========================================= */
-
-/* 生成按鈕 + 選項卡固定於側邊欄底部，捲動時永遠可見 */
 .sidebar-actions {
     position: sticky;
     bottom: 0;
-    background: var(--navy);
-    padding: 10px 0 4px;
+    background: var(--dark-bg);
+    padding: 12px 0 4px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
     z-index: 5;
 }
 
-/* 選項白卡（新增頁碼 / 新增目錄頁） */
+/* HeroUI Card（暗色） */
 .option-card {
     margin: 0;
-    padding: 14px 16px;
-    background: var(--surface);
+    padding: 12px 14px;
+    background: var(--dark-2);
+    border: 1px solid var(--dark-3);
     border-radius: var(--radius);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 .option-card label {
     display: flex;
@@ -605,125 +636,121 @@ input[type="file"] { display: none; }
     gap: 8px;
     cursor: pointer;
     font-weight: 500;
-    font-size: 15px;
-    color: #000;
+    font-size: 14px;
+    color: var(--dark-fg);
 }
-.option-card input[type="checkbox"] {
-    width: 18px;
-    height: 18px;
-    cursor: pointer;
-    flex-shrink: 0;
-}
+.option-card input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; flex-shrink: 0; }
 
-/* 目錄設定面板 */
 .toc-settings {
     margin-top: 12px;
-    margin-left: 26px;
-    padding: 14px;
-    background: var(--surface-alt);
-    border-radius: 6px;
-    border-left: 3px solid var(--green);
+    padding: 12px;
+    background: var(--dark-bg);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--dark-3);
 }
-.toc-settings-title {
-    font-weight: bold;
-    margin-bottom: 12px;
-    color: #333;
-    font-size: 14px;
-}
-.toc-settings-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 14px;
-}
-.toc-field label {
-    display: block;
-    font-size: 12px;
-    color: #666;
-    margin-bottom: 6px;
-    font-weight: 500;
-}
-.toc-field .toc-input-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
+.toc-settings-title { font-weight: 600; margin-bottom: 12px; color: var(--dark-fg); font-size: 13px; }
+.toc-settings-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.toc-field label { display: block; font-size: 11px; color: var(--default-400); margin-bottom: 6px; font-weight: 500; }
+.toc-field .toc-input-row { display: flex; align-items: center; gap: 6px; }
+
+/* HeroUI Input (flat, 暗色) */
 .toc-input {
-    width: 70px;
-    padding: 6px 8px;
-    border: 1px solid var(--gray-border);
-    border-radius: 4px;
-    font-size: 14px;
+    width: 68px;
+    height: 32px;
+    padding: 0 10px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--dark-2);
+    color: var(--dark-fg);
+    font-size: 13px;
+    transition: background .2s var(--ease);
 }
-.toc-field .toc-unit { font-size: 12px; color: #999; }
+.toc-input:hover { background: var(--dark-3); }
+.toc-field .toc-unit { font-size: 11px; color: var(--default-500); }
 .toc-field.toc-field-full { grid-column: 1 / -1; }
+
 .toc-reset-btn {
     margin-top: 12px;
-    padding: 6px 16px;
-    font-size: 13px;
-    background: white;
-    border: 1px solid var(--gray-border);
-    border-radius: 4px;
+    height: 32px;
+    padding: 0 14px;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--dark-2);
+    color: var(--dark-fg);
+    border: 1px solid var(--dark-3);
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    transition: background 0.2s;
+    transition: background .2s var(--ease);
 }
-.toc-reset-btn:hover { background: #f0f0f0; }
+.toc-reset-btn:hover { background: var(--dark-3); }
 
-/* Modal 提示文字與輸入框 */
-.modal-hint { font-size: 13px; color: var(--gray-text); }
+.modal-hint { font-size: 13px; color: var(--default-500); }
 .ask-input {
-    padding: 8px 10px;
-    border: 1px solid var(--gray-border);
-    border-radius: 5px;
+    height: 40px;
+    padding: 0 12px;
+    border: none;
+    border-radius: var(--radius);
+    background: var(--default-100);
     font-size: 14px;
+    color: var(--foreground);
+    transition: background .2s var(--ease);
 }
+.ask-input:hover { background: var(--default-200); }
 
-/* 縮圖容器（來源 Grid 的畫面置中） */
 .page-thumb {
-    overflow: hidden;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100%;
-    width: 100%;
+    overflow: hidden; display: flex;
+    justify-content: center; align-items: center;
+    height: 100%; width: 100%;
 }
 
-/* 檔案列表長檔名省略 */
 .file-list-item span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex: 1;
-    margin-right: 8px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1; margin-right: 8px;
 }
-
-/* 右側縮圖「超大」 */
-.target-panel.size-xlarge .selected-pages.grid-view { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
 
 /* =========================================
-   7. Modal 與其他設定
+   8. Modal (HeroUI Modal)
    ========================================= */
-
 dialog.modal-content {
     border: none;
-    background: white; padding: 25px; border-radius: 8px;
+    background: var(--content1);
+    padding: 20px 24px 24px;
+    border-radius: var(--radius-lg);
     width: 90%; max-width: 600px;
-    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+    box-shadow: 0 24px 48px rgba(0,0,0,.18), 0 8px 16px rgba(0,0,0,.08);
+    color: var(--foreground);
 }
-dialog.modal-content[open] { display: flex; flex-direction: column; gap: 15px; }
-dialog.modal-content::backdrop { background: rgba(0, 0, 0, 0.6); }
-.modal-content h3 { color: var(--navy); border-bottom: 1px solid var(--gray-bg); padding-bottom: 10px; }
+dialog.modal-content[open] { display: flex; flex-direction: column; gap: 14px; }
+dialog.modal-content::backdrop { background: rgba(0,0,0,.5); backdrop-filter: blur(2px); }
+.modal-content h3 {
+    font-size: 17px; font-weight: 600; color: var(--foreground);
+    border-bottom: 1px solid var(--default-200); padding-bottom: 12px;
+}
 
 #tocTextarea {
     width: 100%; height: 300px; font-size: 14px;
-    line-height: 1.6; padding: 10px;
-    border: 1px solid var(--gray-border); border-radius: 5px; resize: vertical;
+    line-height: 1.6; padding: 12px;
+    border: none; border-radius: var(--radius);
+    background: var(--default-100);
+    color: var(--foreground);
+    resize: vertical;
+    font-family: inherit;
 }
 
-.modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.modal-actions .btn:not([class*="btn-"]),
+.modal-actions .btn:only-child { }
+/* 取消鈕：HeroUI light variant */
+.modal-actions .btn:not(.btn-primary):not(.btn-success):not(.btn-danger) {
+    background: transparent;
+    color: var(--danger);
+}
+.modal-actions .btn:not(.btn-primary):not(.btn-success):not(.btn-danger):hover {
+    background: rgba(243,18,96,.1);
+}
 
-/* 選項群組 (Options Group) - 用於設定面板 */
 .options-group {
-    background: var(--navy-2); padding: 15px; border-radius: 5px;
+    background: var(--dark-2); padding: 14px; border-radius: var(--radius);
     display: flex; flex-direction: column; gap: 12px; font-size: 14px;
 }
 .options-group div { display: flex; align-items: center; gap: 10px; }
