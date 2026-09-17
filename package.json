@@ -1,0 +1,12 @@
+{
+  "name": "pdf_recompose",
+  "version": "1.0.0",
+  "private": true,
+  "description": "純前端 PDF 頁面重組工具（合併／拆分／排序／目錄）。此 package.json 只為了端到端驗證而存在，網站本身不需要任何建置或相依套件。",
+  "type": "module",
+  "scripts": {
+    "test": "node verify.mjs",
+    "serve": "python3 -m http.server 8000"
+  },
+  "devDependencies": {}
+}

@@ -473,7 +473,15 @@ input[type="file"] { display: none; }
 }
 
 .page-item .page-checkbox { position: absolute; top: 8px; left: 8px; transform: scale(1.15); }
-.page-item canvas { width: 100%; display: block; border-radius: var(--radius-sm); }
+.page-item canvas, .page-item .page-thumb-img {
+    width: 100%; height: auto; display: block;
+    object-fit: contain; border-radius: var(--radius-sm);
+}
+.page-list-item .list-thumb-wrapper .page-thumb-img,
+.page-list-item .list-thumb-wrapper canvas {
+    max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain;
+}
+.page-list-item .thumb-fallback { font-size: 9px; line-height: 1.1; text-align: center; }
 .page-number { text-align: center; font-size: 11px; color: var(--default-500); margin-top: 6px; }
 
 .pages-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
@@ -481,12 +489,14 @@ input[type="file"] { display: none; }
 .page-list-item {
     border: 1px solid var(--default-200);
     border-radius: var(--radius);
-    padding: 10px;
+    padding: 10px 12px;
     cursor: pointer;
     transition: all .2s var(--ease);
     background: var(--content1);
     display: flex;
-    justify-content: space-between;
+    /* 用 flex-start + 明確 gap：space-between 會把縮圖擠到勾選框旁邊、
+       文字左緣參差不齊，反而難讀。 */
+    justify-content: flex-start;
     align-items: center;
     position: relative;
     gap: 10px;
@@ -494,11 +504,16 @@ input[type="file"] { display: none; }
 .page-list-item:hover { border-color: var(--default-300); box-shadow: var(--shadow-sm); }
 .page-list-item.checked { border-color: var(--primary); background: var(--primary-50); }
 
-.page-list-item .page-checkbox { position: static; transform: scale(1.15); margin-right: 10px; }
-.page-list-item .list-thumb-wrapper { width: 30px; display: flex; justify-content: center; margin-right: 10px; }
+.page-list-item .page-checkbox { position: static; transform: scale(1.15); flex: 0 0 auto; }
+.page-list-item .list-thumb-wrapper {
+    width: 34px; height: 44px; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; background: var(--default-100);
+    border-radius: 4px; margin-right: 10px;
+}
 .page-list-text {
-    flex: 1; font-size: 13px; color: var(--foreground);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 10px;
+    flex: 1; min-width: 0; font-size: 13px; color: var(--foreground);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* HeroUI Chip */
 .page-list-number {
@@ -547,7 +562,7 @@ input[type="file"] { display: none; }
     width: 100%; flex: 1; display: flex; align-items: center;
     justify-content: center; overflow: hidden; margin-bottom: 6px;
 }
-.grid-item canvas { max-width: 100%; max-height: 120px; object-fit: contain; border-radius: 6px; }
+.grid-item canvas, .grid-item .page-thumb-img { max-width: 100%; max-height: 120px; object-fit: contain; border-radius: 6px; }
 
 .page-num-badge {
     position: absolute; bottom: 6px; left: 6px;
@@ -580,7 +595,7 @@ input[type="file"] { display: none; }
     overflow: hidden; background: var(--default-100);
     border-radius: 6px; margin-right: 10px;
 }
-.list-item canvas { max-width: 100%; max-height: 100%; }
+.list-item canvas, .list-item .page-thumb-img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
 
 /* 小節分隔 */
 .selected-divider-item {
@@ -594,6 +609,13 @@ input[type="file"] { display: none; }
 }
 .grid-view .selected-divider-item { grid-column: 1 / -1; margin: 6px 0; }
 .selected-divider-title { flex: 1; font-weight: 600; font-size: 13px; color: var(--success-600); }
+/* 空章節：後面沒有內容頁，不會出現在目錄上，用灰階虛線提示 */
+.selected-divider-item.empty-section {
+    background: var(--default-50);
+    border-color: var(--default-300);
+    opacity: .85;
+}
+.selected-divider-item.empty-section .selected-divider-title { color: var(--default-500); font-weight: 500; }
 
 .drag-handle { cursor: move; color: var(--default-400); font-size: 16px; margin-right: 8px; }
 .selected-page-item.dragging, .selected-divider-item.dragging {
@@ -738,15 +760,13 @@ dialog.modal-content::backdrop { background: rgba(0,0,0,.5); backdrop-filter: bl
 }
 
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.modal-actions .btn:not([class*="btn-"]),
-.modal-actions .btn:only-child { }
-/* 取消鈕：HeroUI light variant */
+/* 取消鈕：HeroUI flat default（中性色；紅色容易讓人以為是破壞性操作） */
 .modal-actions .btn:not(.btn-primary):not(.btn-success):not(.btn-danger) {
-    background: transparent;
-    color: var(--danger);
+    background: var(--default-100);
+    color: var(--default-700);
 }
 .modal-actions .btn:not(.btn-primary):not(.btn-success):not(.btn-danger):hover {
-    background: rgba(243,18,96,.1);
+    background: var(--default-200);
 }
 
 .options-group {
@@ -756,3 +776,42 @@ dialog.modal-content::backdrop { background: rgba(0,0,0,.5); backdrop-filter: bl
 .options-group div { display: flex; align-items: center; gap: 10px; }
 .options-group input[type="checkbox"] { width: 17px; height: 17px; flex-shrink: 0; }
 .options-group label { cursor: pointer; line-height: 1.4; }
+
+/* =========================================
+   9. 縮圖骨架（延遲渲染時先佔位，避免版面跳動）
+   ========================================= */
+.thumb-placeholder {
+    width: 100%;
+    height: 100%;
+    min-height: 28px;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(90deg, var(--default-100) 25%, var(--default-200) 37%, var(--default-100) 63%);
+    background-size: 400% 100%;
+    animation: thumb-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes thumb-shimmer {
+    0% { background-position: 100% 0; }
+    100% { background-position: 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .thumb-placeholder { animation: none; }
+}
+
+/* =========================================
+   10. 窄螢幕（平板／手機）：側邊欄移到上方、主區可捲動
+   ========================================= */
+@media (max-width: 900px) {
+    body { flex-direction: column; height: auto; min-height: 100vh; overflow: auto; }
+    .sidebar {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid var(--dark-2);
+        max-height: none;
+    }
+    .sidebar-actions { position: static; }
+    .main-content { flex-direction: column; gap: 0; overflow: visible; }
+    .panel-resizer { display: none; }
+    .source-panel, .target-panel { min-height: 60vh; }
+    #sourcePages, #selectedPages { max-height: 70vh; }
+    .qs-select { max-width: none; }
+}

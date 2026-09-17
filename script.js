@@ -4,6 +4,18 @@
 window.onload = function() {
 
     // ------------------------------------------------------
+    // 0. 全域錯誤防護
+    // 說明：HTML 的 onclick 呼叫到 async 函式（removeFile / generatePDF ...）時，
+    // 若 Promise 被拒絕，瀏覽器只會印 console error，使用者端完全沒反應。
+    // 這裡統一攔下來提示，避免「按了沒動靜」的無聲失敗。
+    // ------------------------------------------------------
+    window.addEventListener('unhandledrejection', (e) => {
+        const msg = (e.reason && e.reason.message) ? e.reason.message : String(e.reason);
+        console.error('未處理的 Promise 錯誤：', e.reason);
+        if (typeof showNotification === 'function') showNotification('❌ 操作失敗：' + msg, 'error');
+    });
+
+    // ------------------------------------------------------
     // 1. 函式庫設定與全域變數 (Configuration & State)
     // ------------------------------------------------------
     
@@ -18,18 +30,28 @@ window.onload = function() {
     let viewMode = 'list';      // 左側檢視模式 (list/grid)
     let thumbnailSize = 'medium'; // 左側縮圖大小
 
-    // ✅ [修正 2] 預設改為清單顯示
-    let targetViewMode = 'list'; // 右側檢視模式 (原本是 'grid')
+    // 預設檢視模式
+    let targetViewMode = 'list'; // 右側檢視模式
     let targetThumbnailSize = 'medium'; // 右側縮圖大小
 
     // 操作輔助變數
     let lastSourceClickGlobalIndex = null; // (Shift多選) 上次點擊的全域索引
     let clearFilesConfirmMode = false;    // 清除檔案確認鎖
     let clearSelectedConfirmMode = false; // 清除已選確認鎖
+    let isLoadingFiles = false;           // 載入中鎖：避免連續拖入造成 pdfFiles 疊加與進度錯亂
+    let pendingFileQueue = [];            // 載入中抵達的檔案先排隊，載完再處理（不丟棄）
+
+    // 縮圖延遲渲染：頁面很多時只先建立骨架，捲到可見範圍才放 <img>
+    let sourceObserver = null;            // IntersectionObserver
+    let sourceRenderToken = 0;            // 每次重繪 +1，用來讓舊的 observer 失效
 
     // PDF 預覽相關
     let finalPdfBytes = null;
     let currentPreviewUrl = null;
+
+    // 可調參數
+    const MAX_FILE_BYTES = 300 * 1024 * 1024; // 單檔上限（超過只警告，不阻擋）
+    const TOC_LINE_HEIGHT_DEFAULT = 20;
 
     // ------------------------------------------------------
     // 2. 函式庫檢查 (Dependency Check)
@@ -117,21 +139,36 @@ window.onload = function() {
     // ------------------------------------------------------
     
     // 拖曳上傳
-    uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); uploadArea.classList.add('drag-over'); });
+    const isPdfFile = (f) => f && (f.type === 'application/pdf' || /\.pdf$/i.test(f.name || ''));
+    // 回傳本次接受的 PDF；非 PDF 一律提示，避免「丟了卻沒反應」
+    function pickPdfFiles(fileListLike) {
+        const all = Array.from(fileListLike || []);
+        const pdfs = all.filter(isPdfFile);
+        const skipped = all.length - pdfs.length;
+        if (skipped > 0) showNotification(`⚠️ 已忽略 ${skipped} 個非 PDF 檔案`, 'info');
+        return pdfs;
+    }
+    // 拖曳期間只有「確定是檔案」才顯示高亮，拖曳文字/連結不會誤亮
+    const dragHasFiles = (e) => !!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'));
+
+    uploadArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (dragHasFiles(e)) uploadArea.classList.add('drag-over');
+    });
     uploadArea.addEventListener('dragleave', () => { uploadArea.classList.remove('drag-over'); });
     uploadArea.addEventListener('drop', (e) => {
         e.preventDefault();
         e.stopPropagation();
         uploadArea.classList.remove('drag-over');
-        const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
-        handleFiles(files);
+        handleFiles(pickPdfFiles(e.dataTransfer.files));
     });
-    fileInput.addEventListener('change', (e) => { handleFiles(Array.from(e.target.files)); });
+    fileInput.addEventListener('change', (e) => { handleFiles(pickPdfFiles(e.target.files)); });
 
     // 全視窗拖放：在視窗任意位置拖入 PDF 皆可載入
     window.addEventListener('dragover', (e) => {
         e.preventDefault();
-        uploadArea.classList.add('drag-over');
+        if (dragHasFiles(e)) uploadArea.classList.add('drag-over');
     });
     window.addEventListener('dragleave', (e) => {
         if (!e.relatedTarget) uploadArea.classList.remove('drag-over');
@@ -139,8 +176,7 @@ window.onload = function() {
     window.addEventListener('drop', (e) => {
         e.preventDefault();
         uploadArea.classList.remove('drag-over');
-        const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
-        if (files.length > 0) handleFiles(files);
+        handleFiles(pickPdfFiles(e.dataTransfer.files));
     });
 
     // Modal 點擊背景關閉 (dialog 的 backdrop 點擊 target 會是 dialog 本身)
@@ -222,7 +258,8 @@ window.onload = function() {
             document.getElementById('askDialogOk').onclick = () => done(input ? inputEl.value : true);
             document.getElementById('askDialogCancel').onclick = () => done(null);
             dlg.oncancel = (e) => { e.preventDefault(); done(null); };
-            dlg.showModal();
+            // 已經開著就不要再 showModal()：會丟 InvalidStateError，呼叫端的 Promise 永遠不會 resolve。
+            if (!dlg.open) dlg.showModal();
             if (input) inputEl.select();
         });
     }
@@ -257,14 +294,24 @@ window.onload = function() {
 
     // --- DOM 局部更新輔助（取代整面板重建，大量頁面時避免閃爍與卡頓） ---
 
+    // 一次掃描建立「data-page-key → 節點」對照表：勾選/旋轉同步是 O(n) 次 querySelector，
+    // 500 頁的文件每次點擊都要做 500 次選擇器查詢，這裡改成一次查詢 + Map 查找。
+    function buildSourceKeyMap() {
+        const map = new Map();
+        sourcePages.querySelectorAll('[data-page-key]').forEach(el => {
+            map.set(el.dataset.pageKey, el);
+        });
+        return map;
+    }
+
     // 依資料狀態同步「左側來源」的勾選樣式/核取方塊
     function syncSourceCheckDom() {
+        const map = buildSourceKeyMap();
         let missing = false;
         pdfFiles.forEach((file, fileIndex) => {
             if (!file) return;
             file.pages.forEach((page, pageIndex) => {
-                const canvas = document.getElementById(`source_${fileIndex}_${pageIndex}`);
-                const itemEl = canvas && canvas.closest('.page-item, .page-list-item');
+                const itemEl = map.get(`${fileIndex}_${pageIndex}`);
                 if (itemEl) {
                     itemEl.classList.toggle('checked', !!page.isChecked);
                     const cb = itemEl.querySelector('.page-checkbox');
@@ -291,12 +338,15 @@ window.onload = function() {
     }
 
     // 只更新「左側來源」旋轉樣式（transition 保留自原 inline style）
+    // 尚未渲染縮圖的骨架沒有 <img>，旋轉值會存在資料裡，等 fillSourceThumb 時一起套用。
     function applySourceRotationDom() {
+        const map = buildSourceKeyMap();
         pdfFiles.forEach((file, fileIndex) => {
             if (!file) return;
             file.pages.forEach((page, pageIndex) => {
-                const canvas = document.getElementById(`source_${fileIndex}_${pageIndex}`);
-                if (canvas) canvas.style.transform = `rotate(${(page.sourceRotation || 0) % 360}deg)`;
+                const itemEl = map.get(`${fileIndex}_${pageIndex}`);
+                const el = itemEl && itemEl.querySelector('.page-thumb-img, .thumb-fallback');
+                if (el) el.style.transform = `rotate(${(page.sourceRotation || 0) % 360}deg)`;
             });
         });
     }
@@ -305,8 +355,9 @@ window.onload = function() {
     function applyTargetRotationDom() {
         selectedPages.forEach((item, index) => {
             if (!item || item.type === 'divider') return;
-            const canvas = document.getElementById(`selected_${index}`);
-            if (canvas) canvas.style.transform = `rotate(${(item.rotation || 0) % 360}deg)`;
+            const itemEl = selectedPagesContainer.querySelector(`[data-index="${index}"]`);
+            const el = itemEl && itemEl.querySelector('.page-thumb-img, .thumb-fallback');
+            if (el) el.style.transform = `rotate(${(item.rotation || 0) % 360}deg)`;
         });
     }
 
@@ -334,14 +385,54 @@ window.onload = function() {
     // === 邏輯區塊：檔案處理 (File Processing)
     // ======================================================
 
+    // 縮圖存成 data URL：WebP 優先（同品質檔案最小），不支援時退回 JPEG。
+    // 這裡只做一次編碼，之後畫面直接 <img>，不再需要離屏 canvas 與 drawImage 複製。
+    // 注意：toDataURL 失敗時會回傳 'data:,'，直接塞進 <img> 會變成壞圖並噴 console error，
+    // 所以編碼失敗一律回傳 null，讓 UI 走「無法預覽」的佔位。
+    function isUsableDataUrl(url) {
+        return typeof url === 'string' && /^data:image\//.test(url);
+    }
+
+    function toThumbDataUrl(canvas) {
+        try {
+            const webp = canvas.toDataURL('image/webp', 0.6);
+            if (isUsableDataUrl(webp)) return webp;
+        } catch (e) { /* 不支援 WebP 就往下走 */ }
+        try {
+            const jpeg = canvas.toDataURL('image/jpeg', 0.7);
+            return isUsableDataUrl(jpeg) ? jpeg : null;
+        } catch (e) { return null; }
+    }
+
     async function handleFiles(files) {
-        if (files.length === 0) return;
-        
+        if (!files || files.length === 0) {
+            // 選擇檔案對話框被取消時不會有 change 事件，這裡僅是保險
+            return;
+        }
+        if (isLoadingFiles) {
+            // 載入中又丟檔案：排隊等這批跑完再處理。
+            // （不能直接丟掉——使用者連續拖曳兩批、或程式化連續觸發時，第二批會憑空消失。）
+            pendingFileQueue.push(...files);
+            progress.textContent = `⏳ 正在載入中...（另有 ${pendingFileQueue.length} 個檔案排隊中）`;
+            return;
+        }
+        isLoadingFiles = true;
+        const fileInputEl = document.getElementById('fileInput');
+        const generateBtn = document.getElementById('generateBtn');
+        if (fileInputEl) fileInputEl.disabled = true;
+        if (generateBtn) generateBtn.disabled = true;
+
+        const oversized = files.filter(f => f.size > MAX_FILE_BYTES);
+        if (oversized.length > 0) {
+            showNotification(`⚠️ ${oversized.length} 個檔案超過 ${Math.round(MAX_FILE_BYTES / 1024 / 1024)}MB，載入可能會很久`, 'info');
+        }
+
         progress.textContent = `⏳ 正在載入 ${files.length} 個檔案...`;
         progress.classList.remove('success', 'error');
         progress.classList.add('active');
 
         let loadedCount = 0;
+        const failedFiles = [];
         for (const [fileIdx, file] of files.entries()) {
             const fileData = { name: file.name, file: file, pages: [] };
             try {
@@ -366,9 +457,17 @@ window.onload = function() {
                             canvas.height = viewport.height;
                             await page.render({ canvasContext: context, viewport: viewport }).promise;
                             const info = await extractPageInfo(page, i);
+                            // 縮圖存成壓縮後的 data URL，並立刻釋放 canvas 的點陣圖。
+                            // 原本是「每個頁面留一張離屏 canvas，再 drawImage 複製一份到 DOM canvas」：
+                            // A4 在 scale 0.5 是 298×421，一張約 0.5MB，200 頁就是 100MB（離屏）＋
+                            // 100MB（DOM）＋右側再一份。實測 200 頁文件光 canvas 點陣圖就約 250MB，
+                            // 500 頁的公文會直接把瀏覽器拖垮。改成 data URL 後同樣 200 頁只佔幾 MB。
+                            const thumb = toThumbDataUrl(canvas);
+                            canvas.width = 0;
+                            canvas.height = 0;
                             fileData.pages[i - 1] = { 
                                 pageNum: i, 
-                                canvas: canvas, 
+                                thumb: thumb, 
                                 firstLine: info.title,
                                 isChecked: false, 
                                 sourceRotation: 0 
@@ -378,7 +477,7 @@ window.onload = function() {
                             // 保留佔位，避免頁碼索引錯亂
                             fileData.pages[i - 1] = { 
                                 pageNum: i, 
-                                canvas: null, 
+                                thumb: null, 
                                 firstLine: `Page ${i}`,
                                 isChecked: false, 
                                 sourceRotation: 0 
@@ -397,11 +496,12 @@ window.onload = function() {
                 for (let w = 0; w < CONCURRENCY; w++) workers.push(renderPageWorker());
                 await Promise.all(workers);
 
-                pdf.destroy(); // 縮圖已產生，釋放 pdf.js worker 記憶體；生成時會用 file 重新讀取
+                await pdf.destroy(); // 縮圖已產生，釋放 pdf.js worker 記憶體；生成時會用 file 重新讀取
                 pdfFiles.push(fileData);
                 loadedCount++;
             } catch (error) {
                 console.error(`處理檔案 "${file.name}" 失敗:`, error);
+                failedFiles.push(file.name);
                 showNotification(`處理檔案 "${file.name}" 失敗，檔案可能已損毀。`, 'error');
             }
         }
@@ -413,10 +513,27 @@ window.onload = function() {
             progress.textContent = '❌ 所有檔案載入失敗';
             progress.classList.add('error');
         } else {
-            progress.textContent = `✅ ${loadedCount} 個檔案載入完成！`;
+            // 分批上傳時 loadedCount 只算這一批，累計數量才不會讓人以為前面的檔案掉了
+            const total = pdfFiles.length;
+            progress.textContent = files.length === loadedCount && files.length === total
+                ? `✅ ${loadedCount} 個檔案載入完成！`
+                : `✅ 本次載入 ${loadedCount}/${files.length} 個檔案（累計 ${total} 個）`;
             progress.classList.add('success');
         }
         setTimeout(() => { progress.classList.remove('active', 'success', 'error'); }, 2000);
+
+        isLoadingFiles = false;
+        if (fileInputEl) fileInputEl.disabled = false;
+        if (generateBtn) generateBtn.disabled = false;
+        if (failedFiles.length > 0) {
+            showNotification(`⚠️ ${failedFiles.length} 個檔案載入失敗：${failedFiles.join('、')}`, 'error');
+        }
+
+        // 載入期間排隊的檔案接續處理
+        if (pendingFileQueue.length > 0) {
+            const queued = pendingFileQueue.splice(0, pendingFileQueue.length);
+            handleFiles(queued);
+        }
     }
 
     // 抽取頁面全文（座標、字級）與標題，一次 getTextContent 完成。
@@ -506,6 +623,25 @@ window.onload = function() {
         return title;
     }
 
+    // 這個小節標題後面還有內容頁嗎？（沒有內容頁的小節在產出的目錄上不會出現）
+    function isMeaningfulDivider(items, index) {
+        const item = items[index];
+        if (!item || item.type !== 'divider') return false;
+        for (let i = index + 1; i < items.length; i++) {
+            if (!items[i]) continue;
+            return items[i].type !== 'divider';
+        }
+        return false;
+    }
+
+    // 移除「後面沒有內容頁」的小節標題：來源頁被刪掉後，小節會變成空章節。
+    function pruneOrphanDividers(items) {
+        return items.filter((item, index) => {
+            if (!item || item.type !== 'divider') return true;
+            return isMeaningfulDivider(items, index);
+        });
+    }
+
     function updateFileList() {
         fileList.innerHTML = pdfFiles.map((file, index) => `
             <li class="file-list-item">
@@ -528,6 +664,7 @@ window.onload = function() {
             if (p.fileIndex > index) p.fileIndex--;
             return p;
         });
+        selectedPages = pruneOrphanDividers(selectedPages);
         updateFileList();
         renderSourcePages();
         renderSelectedPages();
@@ -578,80 +715,132 @@ window.onload = function() {
         sourcePanel.classList.remove('size-small', 'size-medium', 'size-large', 'size-xlarge');
         sourcePanel.classList.add(`size-${size}`);
         
-        document.querySelectorAll('#size-toggle button').forEach(btn => btn.classList.remove('active'));
-        document.querySelector(`#size-toggle button[onclick="setThumbnailSize('${size}')"]`).classList.add('active');
+        document.querySelectorAll('#size-toggle button').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.size === size);
+        });
     }
 
     function renderSourcePages() {
+        if (sourceObserver) { sourceObserver.disconnect(); sourceObserver = null; }
+        sourceRenderToken++;
+
         if (pdfFiles.length === 0) {
             sourcePages.innerHTML = '<div class="empty-message"><span class="empty-icon">📂</span>尚未載入任何 PDF 檔案<div class="empty-hint">將 PDF 拖曳到視窗任意位置<br>或點擊左側「選擇檔案」按鈕</div></div>';
             const selectAllSource = document.getElementById('selectAllSource');
             if (selectAllSource) selectAllSource.checked = false; // 避免全選框殘留勾選態
             return;
         }
+        // 先建立「骨架」：只放縮圖佔位，捲到可見範圍才由 IntersectionObserver 塞入 <img>。
+        // 之前是一次組出所有頁面的 <img src="data:..."> 大字串，500 頁的文件會產生近 500 個
+        // 數十 KB 的字串與屬性，主執行緒會被字串串接卡住好幾秒。
         sourcePages.innerHTML = pdfFiles.map((file, fileIndex) => {
-             if (!file) return '';
-             
-             // [修正] 強制 List 模式使用垂直排列 (flex-direction: column)
-             const pagesHtml = viewMode === 'grid' 
-                ? `<div class="pages-grid">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'grid')).join('')}</div>`
-                : `<div class="pages-list">${file.pages.map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, 'list')).join('')}</div>`;
-             
-             return `<div class="pdf-file"><div class="pdf-file-header"><div class="pdf-file-name">${esc(file.name || 'Unknown File')}</div></div>${pagesHtml}</div>`;
+            if (!file) return '';
+            const itemType = viewMode === 'grid' ? 'grid' : 'list';
+            const pagesHtml = file.pages
+                .map((page, pageIndex) => renderPageItem(fileIndex, pageIndex, itemType))
+                .join('');
+            const listClass = viewMode === 'grid' ? 'pages-grid' : 'pages-list';
+            return `<div class="pdf-file"><div class="pdf-file-header"><div class="pdf-file-name">${esc(file.name || 'Unknown File')}</div></div><div class="${listClass}">${pagesHtml}</div></div>`;
         }).join('');
 
-        // 重新繪製 Canvas (保持不變)
-        pdfFiles.forEach((file, fileIndex) => {
-             if (file) {
-                 file.pages.forEach((page, pageIndex) => {
-                     const canvas = document.getElementById(`source_${fileIndex}_${pageIndex}`);
-                     if (canvas && page.canvas) {
-                         const ctx = canvas.getContext('2d');
-                         if (page.canvas.width > 0 && page.canvas.height > 0) {
-                             canvas.width = page.canvas.width;
-                             canvas.height = page.canvas.height;
-                             ctx.drawImage(page.canvas, 0, 0);
-                         }
-                     }
-                 });
-             }
-        });
+        setupSourceLazyRender();
     }
 
+    // 骨架：data-page-key 與勾選框先出來（互動不受影響），縮圖之後才補。
     function renderPageItem(fileIndex, pageIndex, type) {
         if (!pdfFiles[fileIndex] || !pdfFiles[fileIndex].pages[pageIndex]) return '';
         const page = pdfFiles[fileIndex].pages[pageIndex];
-        
+
         const checkedAttr = page.isChecked ? 'checked' : '';
         const checkedClass = page.isChecked ? 'checked' : '';
-        const currentRotation = page.sourceRotation || 0; 
+        const currentRotation = page.sourceRotation || 0;
         const rotationStyle = `transform: rotate(${currentRotation}deg); transition: transform 0.3s;`;
-        
+
         const clickAction = `onclick="toggleSourceCheck(${fileIndex}, ${pageIndex}, event)"`;
         const checkboxAction = `onclick="event.stopPropagation(); toggleSourceCheck(${fileIndex}, ${pageIndex}, event)"`;
+        const key = `${fileIndex}_${pageIndex}`;
 
         if (type === 'grid') {
             return `
-                <div class="page-item ${checkedClass}" ${clickAction}>
+                <div class="page-item ${checkedClass}" data-page-key="${key}" ${clickAction}>
                     <input type="checkbox" class="page-checkbox" ${checkedAttr} ${checkboxAction}>
-                    <div class="page-thumb">
-                        <canvas id="source_${fileIndex}_${pageIndex}" style="${rotationStyle}"></canvas>
+                    <div class="page-thumb" data-pending="1">
+                        <div class="thumb-placeholder"></div>
                     </div>
                     <div class="page-number">第 ${page.pageNum} 頁</div> 
                 </div>`;
-        } else {
-             const title = esc(page.firstLine || `Page ${page.pageNum}`);
-             // [修正] 加入 style="width: 100%;" 確保寬度佔滿容器
-            return `
-                <div class="page-list-item ${checkedClass}" ${clickAction} title="${title}">
+        }
+        const title = esc(page.firstLine || `Page ${page.pageNum}`);
+        return `
+                <div class="page-list-item ${checkedClass}" data-page-key="${key}" ${clickAction} title="${title}">
                     <input type="checkbox" class="page-checkbox" ${checkedAttr} ${checkboxAction}>
-                    <div class="list-thumb-wrapper">
-                        <canvas id="source_${fileIndex}_${pageIndex}" style="width: 100%; ${rotationStyle}"></canvas>
+                    <div class="list-thumb-wrapper" data-pending="1">
+                        <div class="thumb-placeholder"></div>
                     </div>
                     <div class="page-list-text">${title}</div>
                     <div class="page-list-number">第 ${page.pageNum} 頁</div>
                 </div>`;
+    }
+
+    // 把單一骨架換成真正的縮圖（可重複呼叫，已渲染過就自動跳過）
+    // 傳進來的可能是骨架本身（[data-pending="1"]）或它所屬的頁面項目。
+    function fillSourceThumb(target) {
+        const itemEl = target && target.closest ? (target.closest('.page-item, .page-list-item') || target) : null;
+        if (!itemEl || !itemEl.dataset) return;
+        const wrapper = itemEl.querySelector('[data-pending="1"]');
+        if (!wrapper) return; // 已經渲染過
+        const [fileIndexStr, pageIndexStr] = (itemEl.dataset.pageKey || '').split('_');
+        const fileIndex = Number(fileIndexStr);
+        const pageIndex = Number(pageIndexStr);
+        const page = pdfFiles[fileIndex] && pdfFiles[fileIndex].pages[pageIndex];
+        if (!page) return;
+
+        const rotationStyle = `transform: rotate(${(page.sourceRotation || 0) % 360}deg); transition: transform 0.3s;`;
+        // 不要在這裡寫 width:100%：清單模式的縮圖框只有 34×44，會被這條規則覆蓋成扁細的一條。
+        // 尺寸交給 CSS（grid 用 width:100%，list 用 max-width/max-height + object-fit: contain）。
+        wrapper.innerHTML = page.thumb
+            ? `<img class="page-thumb-img" src="${page.thumb}" alt="第 ${page.pageNum} 頁縮圖" decoding="async" style="${rotationStyle}">`
+            : `<div class="thumb-fallback" style="${rotationStyle}">無法預覽</div>`;
+        delete wrapper.dataset.pending;
+    }
+
+    function setupSourceLazyRender() {
+        const skeletons = Array.from(sourcePages.querySelectorAll('[data-pending="1"]'));
+        if (skeletons.length === 0) return;
+        const token = sourceRenderToken;
+
+        if (typeof IntersectionObserver === 'undefined') {
+            skeletons.forEach(fillSourceThumb); // 老瀏覽器：直接全部渲染
+            return;
         }
+
+        // 先把「目前可視範圍內」的縮圖同步補上。
+        // IntersectionObserver 的回呼只在下一次繪製幀才跑，若完全依賴它，剛載入完那一瞬間
+        // 畫面會是空的（截圖與自動化測試尤其明顯）。getBoundingClientRect() 會強制 layout，
+        // 之後就能用座標自行判斷可見性。
+        const rootRect = sourcePages.getBoundingClientRect();
+        const viewTop = rootRect.top - 400;
+        const viewBottom = rootRect.bottom + 400;
+        const rest = [];
+        for (const el of skeletons) {
+            const rect = el.getBoundingClientRect();
+            if (rect.bottom >= viewTop && rect.top <= viewBottom) {
+                fillSourceThumb(el);
+            } else {
+                rest.push(el);
+            }
+        }
+        if (rest.length === 0) return;
+
+        sourceObserver = new IntersectionObserver((entries) => {
+            if (token !== sourceRenderToken) { sourceObserver.disconnect(); return; }
+            for (const entry of entries) {
+                if (!entry.isIntersecting) continue;
+                fillSourceThumb(entry.target);
+                sourceObserver.unobserve(entry.target);
+            }
+        }, { root: sourcePages, rootMargin: '400px 0px' });
+        rest.forEach(el => sourceObserver.observe(el));
     }
 
     // 核心選取邏輯 (支援 Shift)
@@ -685,8 +874,8 @@ window.onload = function() {
             // 一般單點：就地更新該項目，避免整面重繪造成閃爍
             targetPage.isChecked = !targetPage.isChecked;
             lastSourceClickGlobalIndex = currentGlobalIndex;
-            const canvas = document.getElementById(`source_${fileIndex}_${pageIndex}`);
-            const itemEl = canvas && canvas.closest('.page-item, .page-list-item');
+            const thumbEl = document.querySelector(`[data-page-key="${fileIndex}_${pageIndex}"]`);
+            const itemEl = thumbEl && thumbEl.closest('.page-item, .page-list-item');
             if (itemEl) {
                 itemEl.classList.toggle('checked', targetPage.isChecked);
                 const cb = itemEl.querySelector('.page-checkbox');
@@ -721,7 +910,7 @@ window.onload = function() {
                         fileIndex: fIndex, 
                         pageNum: page.pageNum, 
                         fileName: file.name, 
-                        canvas: page.canvas, 
+                        thumb: page.thumb, 
                         firstLine: page.firstLine,
                         rotation: page.sourceRotation || 0 
                     });
@@ -772,6 +961,8 @@ window.onload = function() {
         pdfFiles = newPdfFiles;
         selectedPages = selectedPages.filter(p => p.type === 'divider' || indexMap.has(p.fileIndex));
         selectedPages.forEach(p => { if (p.type !== 'divider') p.fileIndex = indexMap.get(p.fileIndex); });
+        // 來源被刪光的小節標題會變成孤兒（後面沒有內容頁），留著只會讓目錄多出空章節。
+        selectedPages = pruneOrphanDividers(selectedPages);
         document.getElementById('selectAllSource').checked = false;
 
         updateFileList();
@@ -831,53 +1022,63 @@ window.onload = function() {
         });
     }
 
-    function applyQuickSelection() {
+    // 智慧勾選：以「取代」語意運作（等於一次篩選），
+    // 只作用在選定的檔案上；沒被選到的檔案維持原狀，避免跨檔誤清。
+    async function applyQuickSelection() {
         const fileIndexStr = document.getElementById('qsFileSelect').value;
         const type = document.getElementById('qsTypeSelect').value;
-        const targetFileIndex = parseInt(fileIndexStr); 
+        const targetFileIndex = parseInt(fileIndexStr);
 
         if (pdfFiles.length === 0) {
             showNotification('請先載入 PDF 檔案', 'error');
             return;
         }
 
-        let matchCount = 0;
-        const checkPageLogic = (file, page, pIndex) => {
-            let shouldCheck = false;
-            const pageNum = page.pageNum;
+        const targetFiles = targetFileIndex === -1
+            ? pdfFiles.map((file, index) => ({ file, index }))
+            : (pdfFiles[targetFileIndex] ? [{ file: pdfFiles[targetFileIndex], index: targetFileIndex }] : []);
 
-            switch (type) {
-                case 'all': shouldCheck = true; break;
-                case 'odd': shouldCheck = (pageNum % 2 !== 0); break;
-                case 'even': shouldCheck = (pageNum % 2 === 0); break;
-                case 'first': shouldCheck = (pIndex === 0); break;
-                case 'last': shouldCheck = (pIndex === file.pages.length - 1); break;
-                case 'blank': if (page.firstLine === `Page ${pageNum}`) shouldCheck = true; break;
-            }
-
-            if (shouldCheck) {
-                page.isChecked = true;
-                matchCount++;
-            }
-        };
-
-        if (targetFileIndex === -1) {
-            pdfFiles.forEach(file => {
-                file.pages.forEach((page, pIndex) => checkPageLogic(file, page, pIndex));
-            });
-        } else {
-            const file = pdfFiles[targetFileIndex];
-            if (file) {
-                file.pages.forEach((page, pIndex) => checkPageLogic(file, page, pIndex));
-            }
+        if (targetFiles.length === 0) {
+            showNotification('沒有符合條件的頁面', 'info');
+            return;
         }
 
+        // 先問一次，讓「取代」不會靜默吃掉使用者手動勾的頁面
+        const alreadyChecked = targetFiles.reduce((n, { file }) => n + file.pages.filter(p => p.isChecked).length, 0);
+        if (alreadyChecked > 0) {
+            const scopeName = targetFileIndex === -1 ? '所有檔案' : `「${pdfFiles[targetFileIndex].name}」`;
+            // eslint-disable-next-line no-alert
+            const ok = await askConfirm(`${scopeName} 目前有 ${alreadyChecked} 頁已勾選，套用智慧勾選會先清除這些勾選。要繼續嗎？`);
+            if (!ok) return;
+        }
+
+        let matchCount = 0;
+        for (const { file } of targetFiles) {
+            file.pages.forEach((page, pIndex) => {
+                const pageNum = page.pageNum;
+                let shouldCheck = false;
+                switch (type) {
+                    case 'all': shouldCheck = true; break;
+                    case 'odd': shouldCheck = (pageNum % 2 !== 0); break;
+                    case 'even': shouldCheck = (pageNum % 2 === 0); break;
+                    case 'first': shouldCheck = (pIndex === 0); break;
+                    case 'last': shouldCheck = (pIndex === file.pages.length - 1); break;
+                    case 'blank': shouldCheck = (page.firstLine === `Page ${pageNum}`); break;
+                }
+                page.isChecked = shouldCheck;
+                if (shouldCheck) matchCount++;
+            });
+        }
+
+        const selectAllSource = document.getElementById('selectAllSource');
+        if (selectAllSource) selectAllSource.checked = false;
+        syncSourceCheckDom();
+        updateSelectedCountInfo();
+
         if (matchCount > 0) {
-            syncSourceCheckDom();
-            updateSelectedCountInfo();
-            showNotification(`已自動勾選 ${matchCount} 個頁面`, 'success');
+            showNotification(`已勾選 ${matchCount} 個頁面`, 'success');
         } else {
-            showNotification('沒有符合條件的頁面', 'info');
+            showNotification('沒有符合條件的頁面（原有勾選已清除）', 'info');
         }
     }
 
@@ -907,8 +1108,9 @@ window.onload = function() {
         container.classList.remove('size-small', 'size-medium', 'size-large', 'size-xlarge');
         container.classList.add(`size-${size}`);
         
-        document.querySelectorAll('#target-size-toggle button').forEach(btn => btn.classList.remove('active'));
-        document.querySelector(`#target-size-toggle button[onclick="setTargetThumbnailSize('${size}')"]`).classList.add('active');
+        document.querySelectorAll('#target-size-toggle button').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.size === size);
+        });
     }
 
     function renderSelectedPages() {
@@ -925,7 +1127,7 @@ window.onload = function() {
 
         selectedPagesContainer.className = `selected-pages ${targetViewMode}-view`;
 
-        // [修正] 強制設定容器的 Flex 方向
+        // 依檢視模式設定容器的 flex 方向
         if (targetViewMode === 'list') {
             selectedPagesContainer.style.display = 'flex';
             selectedPagesContainer.style.flexDirection = 'column'; // 強制由上而下
@@ -945,10 +1147,13 @@ window.onload = function() {
              // 分隔線
              if (item.type === 'divider') {
                 // 分隔線在任何模式下都應該佔滿整行
+                // 「後面沒有內容頁」的小節不會出現在目錄上，先在畫面上標示出來。
+                const empty = !isMeaningfulDivider(selectedPages, index);
                 return `
-                    <div class="selected-divider-item" data-index="${index}">
+                    <div class="selected-divider-item${empty ? ' empty-section' : ''}" data-index="${index}"
+                         title="${empty ? '這個小節後面沒有內容頁，不會出現在產出的目錄上' : '小節標題'}">
                         <span class="drag-handle">::</span>
-                         <div class="selected-divider-title">${esc(item.firstLine || 'New Section')}</div>
+                         <div class="selected-divider-title">${esc(item.firstLine || 'New Section')}${empty ? '（空章節，不列入目錄）' : ''}</div>
                         <div class="page-actions">
                             <button class="btn btn-danger" onclick="removeSelectedPage(${index})">✕</button>
                         </div>
@@ -968,7 +1173,9 @@ window.onload = function() {
                 <div class="selected-page-item grid-item ${checkedClass}" data-index="${index}" ${clickAction}>
                     <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleTargetCheck(${index})">
                     <div class="canvas-wrapper">
-                        <canvas id="selected_${index}" style="${rotationStyle}"></canvas>
+                        ${item.thumb
+                            ? `<img class="page-thumb-img" src="${item.thumb}" alt="第 ${index + 1} 張縮圖" loading="lazy" decoding="async" style="${rotationStyle}">`
+                            : `<div class="thumb-fallback" style="${rotationStyle}">無法預覽</div>`}
                     </div>
                     <div class="page-info-grid">
                         <div class="page-num-badge">${index + 1}</div>
@@ -976,13 +1183,15 @@ window.onload = function() {
                     </div>
                 </div>`;
             } else {
-                // [修正] List Item 強制寬度 100%
+                // List Item 需要佔滿整行寬度
                 return `
                 <div class="selected-page-item list-item ${checkedClass}" data-index="${index}" ${clickAction}>
                     <span class="drag-handle">::</span>
                     <input type="checkbox" class="page-checkbox" ${checkedAttr} onclick="event.stopPropagation(); toggleTargetCheck(${index})">
                     <div class="list-thumb-wrapper">
-                        <canvas id="selected_${index}" style="${rotationStyle}"></canvas>
+                        ${item.thumb
+                            ? `<img class="page-thumb-img" src="${item.thumb}" alt="第 ${index + 1} 張縮圖" loading="lazy" decoding="async" style="${rotationStyle}">`
+                            : `<div class="thumb-fallback" style="${rotationStyle}">無法預覽</div>`}
                     </div>
                     <div class="selected-page-info">
                         <div class="selected-page-title">${index + 1}. ${title}</div>
@@ -992,19 +1201,7 @@ window.onload = function() {
             }
         }).join('');
 
-        // 繪製右側 Canvas
-        selectedPages.forEach((item, index) => {
-             if (item && item.type !== 'divider') {
-                 const canvas = document.getElementById(`selected_${index}`);
-                 if (canvas && item.canvas) {
-                    canvas.width = item.canvas.width;
-                    canvas.height = item.canvas.height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(item.canvas, 0, 0);
-                 }
-             }
-        });
-
+        // 縮圖是 data URL，由 <img> 直接呈現
         updateTargetSelectedInfo();
     }
 
@@ -1035,8 +1232,10 @@ window.onload = function() {
 
     function batchDeleteFromTarget() {
         const initialLen = selectedPages.length;
-        selectedPages = selectedPages.filter(p => !p.isChecked); 
-        
+        // 小節分隔線沒有 isChecked，不能被當成「未勾選」而意外刪掉；
+        // 勾選語意只針對內容頁，分隔線一律保留。
+        selectedPages = selectedPages.filter(p => p && (p.type === 'divider' || !p.isChecked));
+
         const deletedCount = initialLen - selectedPages.length;
         if (deletedCount > 0) {
             renderSelectedPages();
@@ -1068,39 +1267,39 @@ window.onload = function() {
         renderSelectedPages();
     }
 
-    function applyTargetQuickSelection() {
+    // 與左側一致：智慧勾選＝一次篩選（取代現有勾選）。
+    // 小節分隔線不佔「第幾張」的序號，所以頁序以內容頁自己的位置計算。
+    async function applyTargetQuickSelection() {
         const type = document.getElementById('qsTargetTypeSelect').value;
+        const pageItems = selectedPages.filter(p => p && p.type !== 'divider');
+        if (pageItems.length === 0) {
+            showNotification('右側還沒有任何頁面', 'info');
+            return;
+        }
+
+        const alreadyChecked = selectedPages.filter(p => p && p.type !== 'divider' && p.isChecked).length;
+        if (alreadyChecked > 0) {
+            const ok = await askConfirm(`右側目前有 ${alreadyChecked} 頁已勾選，套用智慧勾選會先清除這些勾選。要繼續嗎？`);
+            if (!ok) return;
+        }
+
         let count = 0;
-        let pageIndexCounter = 0;
-
-        selectedPages.forEach((item) => {
-            if (item.type === 'divider') return;
-            const currentPos = pageIndexCounter + 1; 
+        pageItems.forEach((item, pos) => {
             let shouldCheck = false;
-
             switch (type) {
                 case 'all': shouldCheck = true; break;
-                case 'odd': shouldCheck = (currentPos % 2 !== 0); break;
-                case 'even': shouldCheck = (currentPos % 2 === 0); break;
-                case 'first': shouldCheck = (pageIndexCounter === 0); break;
-                case 'last': 
-                    const totalPages = selectedPages.filter(p => p.type !== 'divider').length;
-                    shouldCheck = (pageIndexCounter === totalPages - 1); 
-                    break;
-                case 'blank':
-                    if (item.firstLine && item.firstLine.startsWith('Page ')) shouldCheck = true;
-                    break;
+                case 'odd': shouldCheck = (pos % 2 === 0); break;   // 第 1,3,5... 張
+                case 'even': shouldCheck = (pos % 2 === 1); break;  // 第 2,4,6... 張
+                case 'first': shouldCheck = (pos === 0); break;
+                case 'last': shouldCheck = (pos === pageItems.length - 1); break;
+                case 'blank': shouldCheck = !!item.firstLine && item.firstLine.startsWith('Page '); break;
             }
-
-            if (shouldCheck) {
-                item.isChecked = true;
-                count++;
-            }
-            pageIndexCounter++;
+            item.isChecked = shouldCheck;
+            if (shouldCheck) count++;
         });
 
         renderSelectedPages();
-        showNotification(`已勾選右側 ${count} 個頁面`, 'success');
+        showNotification(count > 0 ? `已勾選右側 ${count} 個頁面` : '沒有符合條件的頁面（原有勾選已清除）', count > 0 ? 'success' : 'info');
     }
 
     function clearSelectedPages() {
@@ -1273,9 +1472,17 @@ window.onload = function() {
         return w;
     }
 
-    function drawMixedText(page, text, x, y, size, cjkFont, asciiFont, color) {
+    // 沒有中文字型時的保險：Helvetica 只認 WinAnsi，遇到中文會直接丟錯。
+    // 若放任它丟，該行會整條消失（錯誤被上層 catch 吞掉），使用者只看到空目錄；
+    // 這裡主動換成 '?' 並在前面統一提一次警告。
+    function sanitizeWinAnsi(text) {
+        return String(text).replace(/[^\x20-\x7E\u00A0-\u00FF]/g, '?');
+    }
+
+    function drawMixedText(page, text, x, y, size, cjkFont, asciiFont, color, cjkFontAvailable = true) {
+        const safeText = cjkFontAvailable ? String(text) : sanitizeWinAnsi(text);
         let cx = x;
-        for (const run of splitMixedRuns(text)) {
+        for (const run of splitMixedRuns(safeText)) {
             const font = run.ascii ? asciiFont : cjkFont;
             page.drawText(run.s, { x: cx, y: y, size: size, font: font, color: color });
             cx += font.widthOfTextAtSize(run.s, size);
@@ -1290,8 +1497,8 @@ window.onload = function() {
             return;
         }
 
-        // ✅ [修正 1] 這裡加入了 degrees
-        const { PDFDocument, rgb, StandardFonts, PDFName, PDFArray, degrees } = PDFLib;
+        // degrees 用來把「來源旋轉 + 使用者旋轉」寫進輸出頁
+        const { PDFDocument, rgb, StandardFonts, PDFName, degrees } = PDFLib;
 
         const pageItems = selectedPages.filter(p => p && p.type !== 'divider');
         if (pageItems.length === 0) {
@@ -1309,7 +1516,8 @@ window.onload = function() {
             const newPdf = await PDFDocument.create();
             let customFont;
             let asciiFont;
-            
+            let cjkFontAvailable = true;
+
             // 建立 PDF-Lib 文件快取
             const pdfLibDocCache = new Map();
 
@@ -1328,7 +1536,8 @@ window.onload = function() {
                 asciiFont = await newPdf.embedFont(StandardFonts.Helvetica);
             } catch (fontError) {
                 console.error("中文字型載入失敗:", fontError);
-                showNotification(`警告：無法載入本地字型。目錄將使用英文字型。`, 'error');
+                cjkFontAvailable = false;
+                showNotification('警告：無法載入中文字型，目錄中的中文會以「?」呈現。', 'error');
                 try {
                     customFont = await newPdf.embedFont(StandardFonts.Helvetica);
                     asciiFont = customFont; // 全部用 Helvetica 時 ASCII 字型相同
@@ -1343,211 +1552,258 @@ window.onload = function() {
             
             const addToc = addTocCheckbox.checked;
             const addPageNumbers = document.getElementById('addPageNumbersCheckbox').checked;
-            
-            let tocPages = []; 
-            let tocLinkData = []; 
 
-            // --- 建立目錄頁 (TOC) ---
-            if (addToc) {
-                progress.textContent = '正在建立目錄頁...';
-                
-                const TOC_CONFIG = {
-                    MAIN_TITLE_SIZE: parseInt(document.getElementById('tocMainTitleSize').value) || 20,
-                    SECTION_TITLE_SIZE: parseInt(document.getElementById('tocSectionSize').value) || 14,
-                    ITEM_TITLE_SIZE: parseInt(document.getElementById('tocItemTitleSize').value) || 12,
-                    ITEM_PAGENUM_SIZE: parseInt(document.getElementById('tocPageNumSize').value) || 12,
-                    LINE_HEIGHT: parseInt(document.getElementById('tocLineHeight').value) || 20
-                };
-                
-                // 先模擬排版計算目錄總頁數，否則跨頁目錄的頁碼會少算
-                let simY = 595 - 90;
-                let totalTocPages = 1;
-                for (const item of selectedPages) {
-                    if (!item) continue;
-                    if (simY < 50) { totalTocPages++; simY = 595 - 90; }
-                    simY -= (item.type === 'divider') ? 35 : TOC_CONFIG.LINE_HEIGHT;
-                }
-
-                let tocPage = newPdf.addPage([842, 595]); // 橫向A4
-                tocPages.push(tocPage);
-                
-                drawMixedText(tocPage, '目錄', 50, 595 - 50, TOC_CONFIG.MAIN_TITLE_SIZE, customFont, asciiFont, rgb(0, 0, 0));
-                
-                let yPosition = 595 - 90;
-                let pageCounterForToc = 0;
-
-                for (const item of selectedPages) {
-                    if (!item) continue;
-                    
-                    // TOC 換頁處理
-                    if (yPosition < 50) {
-                        tocPage = newPdf.addPage([842, 595]);
-                        tocPages.push(tocPage);
-                        yPosition = 595 - 90;
-                        drawMixedText(tocPage, '目錄 (續)', 50, 595 - 50, TOC_CONFIG.MAIN_TITLE_SIZE, customFont, asciiFont, rgb(0, 0, 0));
-                    }
-
-                    if (item.type === 'divider') {
-                        yPosition -= 10;
-                        drawMixedText(tocPage, item.firstLine || 'New Section', 50, yPosition, TOC_CONFIG.SECTION_TITLE_SIZE, customFont, asciiFont, rgb(0, 0, 0));
-                        yPosition -= 25;
-                    } else {
-                        pageCounterForToc++;
-                        const title = item.firstLine || `Page ${item.pageNum || '?'}`;
-                        const pageNumStr = `${pageCounterForToc + totalTocPages}`;
-                        
-                        const leftMargin = 70;
-                        const rightMargin = 50;
-                        const pageContentWidth = tocPage.getWidth() - leftMargin - rightMargin;
-                        
-                        let pageNumWidth = 0;
-                        try { pageNumWidth = mixedTextWidth(pageNumStr, TOC_CONFIG.ITEM_PAGENUM_SIZE, customFont, asciiFont); } catch (e) {}
-                        
-                        let truncatedTitle = title;
-                        let titleWidth = 0;
-                        try { titleWidth = mixedTextWidth(truncatedTitle, TOC_CONFIG.ITEM_TITLE_SIZE, customFont, asciiFont); } catch (e) {}
-                        
-                        const minDotSpace = 20;
-                        while (titleWidth > 0 && pageContentWidth > 0 && (titleWidth + pageNumWidth + minDotSpace > pageContentWidth) && truncatedTitle.length > 5) {
-                            truncatedTitle = truncatedTitle.slice(0, -2) + '…';
-                            try { titleWidth = mixedTextWidth(truncatedTitle, TOC_CONFIG.ITEM_TITLE_SIZE, customFont, asciiFont); } catch (e) { titleWidth = 0; }
-                        }
-                        
-                        // 繪製標題
-                        drawMixedText(tocPage, truncatedTitle, leftMargin, yPosition, TOC_CONFIG.ITEM_TITLE_SIZE, customFont, asciiFont, rgb(0, 0, 0));
-                        
-                        // 繪製頁碼
-                        drawMixedText(tocPage, pageNumStr, tocPage.getWidth() - rightMargin - pageNumWidth, yPosition, TOC_CONFIG.ITEM_PAGENUM_SIZE, customFont, asciiFont, rgb(0, 0, 0));
-                        
-                        // 繪製點點
-                        let dotWidth = 0;
-                        const dotSize = Math.min(TOC_CONFIG.ITEM_TITLE_SIZE, TOC_CONFIG.ITEM_PAGENUM_SIZE);
-                        try { dotWidth = asciiFont.widthOfTextAtSize('.', dotSize); } catch (e) {}
-                        
-                        if (dotWidth > 0) {
-                            const dotStartX = leftMargin + titleWidth + 5;
-                            const dotEndX = tocPage.getWidth() - rightMargin - pageNumWidth - 5;
-                            const availableDotSpace = dotEndX - dotStartX;
-                            if (availableDotSpace > dotWidth) {
-                                const numDots = Math.floor(availableDotSpace / dotWidth);
-                                const dotString = '.'.repeat(numDots);
-                                tocPage.drawText(dotString, { 
-                                    x: dotStartX, y: yPosition, 
-                                    size: dotSize, font: asciiFont, color: rgb(0, 0, 0), opacity: 0.5 
-                                });
-                            }
-                        }
-                        
-                        // 儲存連結資訊
-                        tocLinkData.push({
-                            tocPage: tocPage,
-                            targetContentPageIndex: pageCounterForToc - 1,
-                            linkRect: {
-                                x: leftMargin - 5,
-                                y: yPosition - 2,
-                                width: pageContentWidth + 10,
-                                height: Math.max(TOC_CONFIG.ITEM_TITLE_SIZE, TOC_CONFIG.ITEM_PAGENUM_SIZE) + 4
-                            }
-                        });
-                        
-                        yPosition -= TOC_CONFIG.LINE_HEIGHT;
-                    }
-                }
-            }
-            
             // --- 合併內容頁 ---
+            // 先合併、再畫目錄：目錄的頁碼與超連結必須對應「真的進了輸出」的內容頁。
+            // 若某頁複製失敗還照樣印一行，後面所有頁碼與超連結都會整體位移。
+            const contentEntries = []; // 依 selectedPages 順序，只放成功複製的內容頁
             let pageCounterForContent = 0;
-            const pageOffset = tocPages.length;
 
             for (const item of selectedPages) {
                 if (!item || item.type === 'divider') continue;
                 pageCounterForContent++;
                 progress.textContent = `正在合併頁面 (${pageCounterForContent}/${pageItems.length})...`;
-                
+
                 if (item.fileIndex === undefined || item.fileIndex === null || !pdfFiles[item.fileIndex] || !pdfFiles[item.fileIndex].file || !item.pageNum) {
-                    console.error("Missing data for page item:", item); 
+                    console.error("Missing data for page item:", item);
+                    showNotification(`⚠️ 略過 1 頁：來源資料不完整（${item.firstLine || item.pageNum || '未知頁面'}）`, 'error');
                     continue;
                 }
-                
+
                 const sourceFile = pdfFiles[item.fileIndex];
-                
+
                 try {
                     let sourcePdf;
                     if (pdfLibDocCache.has(item.fileIndex)) {
                         sourcePdf = pdfLibDocCache.get(item.fileIndex);
                     } else {
                         const freshArrayBuffer = await sourceFile.file.arrayBuffer();
-                        sourcePdf = await PDFDocument.load(freshArrayBuffer, { ignoreEncryption: true, updateMetadata: false });
+                        // throwOnInvalidObject:false：公部門／掃描件的 PDF 常有小瑕疵，
+                        // 用預設值會整份載入失敗，這裡盡量搶救可用的頁面。
+                        sourcePdf = await PDFDocument.load(freshArrayBuffer, {
+                            ignoreEncryption: true,
+                            updateMetadata: false,
+                            throwOnInvalidObject: false,
+                        });
                         pdfLibDocCache.set(item.fileIndex, sourcePdf);
                     }
 
                     if (item.pageNum < 1 || item.pageNum > sourcePdf.getPageCount()) {
-                        console.error(`Invalid page ${item.pageNum} for ${sourceFile.name}`); 
+                        console.error(`Invalid page ${item.pageNum} for ${sourceFile.name}`);
+                        showNotification(`⚠️ 略過「${sourceFile.name}」第 ${item.pageNum} 頁：頁碼超出範圍`, 'error');
                         continue;
                     }
-                    
+
                     const [copiedPage] = await newPdf.copyPages(sourcePdf, [item.pageNum - 1]);
                     // copyPages 會保留來源角度，疊加使用者旋轉
                     const existingRotation = copiedPage.getRotation().angle;
                     const newPage = newPdf.addPage(copiedPage);
-                    
+
                     const userRotation = item.rotation || 0;
                     const totalRotation = (existingRotation + userRotation) % 360;
-                    
+
                     newPage.setRotation(degrees(totalRotation));
 
-                    // 新增頁碼
-                    if (addPageNumbers) {
-                        const newPageNumber = `${pageCounterForContent + pageOffset}`;
-                        const { width, height } = newPage.getSize();
-                        if (width > 0 && height > 0) {
-                            newPage.drawText(newPageNumber, { 
-                                x: width - 40, y: 30, 
-                                size: 10, font: customFont, color: rgb(0, 0, 0) 
-                            });
-                        }
-                    }
-                    
-                } catch(loadError) {
+                    contentEntries.push({ item, page: newPage });
+                } catch (loadError) {
                     console.error(`Error loading/copying page ${item.pageNum} from ${sourceFile.name}:`, loadError);
                     showNotification(`錯誤：無法處理檔案 "${sourceFile.name}" 第 ${item.pageNum} 頁。`, 'error');
                 }
             }
 
+            // --- 建立目錄頁 (TOC) ---
+            const tocLinkData = [];
+            let tocPageCount = 0;
+
+            if (addToc) {
+                progress.textContent = '正在建立目錄頁...';
+
+                // 沒有中文字型時，Helvetica 遇到中文會直接丟錯（該行會整條消失），
+                // 所以先換成 '?' 再量寬度與繪製，行為與實際輸出一致。
+                const enc = cjkFontAvailable ? (t) => String(t) : sanitizeWinAnsi;
+
+                const readSize = (id, fallback) => {
+                    const v = parseInt(document.getElementById(id).value, 10);
+                    return Number.isFinite(v) ? v : fallback;
+                };
+                const TOC_CONFIG = {
+                    MAIN_TITLE_SIZE: readSize('tocMainTitleSize', 20),
+                    SECTION_TITLE_SIZE: readSize('tocSectionSize', 14),
+                    ITEM_TITLE_SIZE: readSize('tocItemTitleSize', 12),
+                    ITEM_PAGENUM_SIZE: readSize('tocPageNumSize', 12),
+                    LINE_HEIGHT: readSize('tocLineHeight', TOC_LINE_HEIGHT_DEFAULT)
+                };
+
+                // 目錄項目＝大綱（只取有對應內容頁的小節）與成功合併的內容頁交錯排列
+                const tocItems = [];
+                {
+                    let contentIdx = 0;
+                    for (const item of selectedPages) {
+                        if (!item) continue;
+                        if (item.type === 'divider') {
+                            // 後面沒有成功合併的內容頁時，這個小節標題不該出現在目錄上
+                            tocItems.push({ type: 'divider', title: item.firstLine || 'New Section' });
+                        } else if (contentIdx < contentEntries.length) {
+                            tocItems.push({ type: 'page', entryIndex: contentIdx });
+                            contentIdx++;
+                        }
+                    }
+                    while (tocItems.length > 0 && tocItems[tocItems.length - 1].type === 'divider') tocItems.pop();
+                }
+
+                // 先模擬排版計算目錄總頁數，否則跨頁目錄的頁碼會少算
+                let simY = 595 - 90;
+                let totalTocPages = 1;
+                for (const item of tocItems) {
+                    if (simY < 50) { totalTocPages++; simY = 595 - 90; }
+                    simY -= (item.type === 'divider') ? 35 : TOC_CONFIG.LINE_HEIGHT;
+                }
+
+                // 內容頁已經先合併進文件，目錄頁必須插到最前面（不能 addPage，那會排到最後）。
+                // 注意要插在「已插入的目錄頁之後」，否則第二張目錄會跑到第一張前面，
+                // 整份目錄的順序就反了（頁碼與超連結看起來沒錯，實際內容是倒的）。
+                let tocInsertIndex = 0;
+                const newTocPage = () => {
+                    const p = newPdf.insertPage(tocInsertIndex, [842, 595]); // 橫向 A4
+                    tocInsertIndex++;
+                    tocPageCount++;
+                    drawMixedText(p, tocPageCount === 1 ? '目錄' : '目錄 (續)', 50, 595 - 50,
+                        TOC_CONFIG.MAIN_TITLE_SIZE, customFont, asciiFont, rgb(0, 0, 0));
+                    return p;
+                };
+
+                let tocPage = newTocPage();
+                let yPosition = 595 - 90;
+
+                for (const tocItem of tocItems) {
+                    // TOC 換頁處理
+                    if (yPosition < 50) {
+                        tocPage = newTocPage();
+                        yPosition = 595 - 90;
+                    }
+
+                    if (tocItem.type === 'divider') {
+                        yPosition -= 10;
+                        drawMixedText(tocPage, enc(tocItem.title), 50, yPosition, TOC_CONFIG.SECTION_TITLE_SIZE,
+                            customFont, asciiFont, rgb(0, 0, 0));
+                        yPosition -= 25;
+                        continue;
+                    }
+
+                    const { item } = contentEntries[tocItem.entryIndex];
+                    const title = enc(item.firstLine || `Page ${item.pageNum || '?'}`);
+                    const pageNumStr = `${tocItem.entryIndex + 1 + totalTocPages}`;
+
+                    const leftMargin = 70;
+                    const rightMargin = 50;
+                    const pageContentWidth = tocPage.getWidth() - leftMargin - rightMargin;
+
+                    let pageNumWidth = 0;
+                    try { pageNumWidth = mixedTextWidth(pageNumStr, TOC_CONFIG.ITEM_PAGENUM_SIZE, customFont, asciiFont); } catch (e) {}
+
+                    let truncatedTitle = title;
+                    let titleWidth = 0;
+                    try { titleWidth = mixedTextWidth(truncatedTitle, TOC_CONFIG.ITEM_TITLE_SIZE, customFont, asciiFont); } catch (e) {}
+
+                    // 截斷迴圈：每次真的少一個字（先去掉上一次加的省略號再加回），
+                    // 原本的 slice(0,-2)+'…' 長度可能不減反增，最壞情況會多繞很多圈。
+                    const minDotSpace = 20;
+                    while (titleWidth > 0 && pageContentWidth > 0 && (titleWidth + pageNumWidth + minDotSpace > pageContentWidth) && truncatedTitle.length > 5) {
+                        truncatedTitle = truncatedTitle.replace(/…$/, '').slice(0, -1) + '…';
+                        try { titleWidth = mixedTextWidth(truncatedTitle, TOC_CONFIG.ITEM_TITLE_SIZE, customFont, asciiFont); } catch (e) { titleWidth = 0; }
+                    }
+
+                    // 繪製標題
+                    drawMixedText(tocPage, truncatedTitle, leftMargin, yPosition, TOC_CONFIG.ITEM_TITLE_SIZE, customFont, asciiFont, rgb(0, 0, 0));
+
+                    // 繪製頁碼
+                    drawMixedText(tocPage, pageNumStr, tocPage.getWidth() - rightMargin - pageNumWidth, yPosition, TOC_CONFIG.ITEM_PAGENUM_SIZE, customFont, asciiFont, rgb(0, 0, 0));
+
+                    // 繪製點點
+                    let dotWidth = 0;
+                    const dotSize = Math.min(TOC_CONFIG.ITEM_TITLE_SIZE, TOC_CONFIG.ITEM_PAGENUM_SIZE);
+                    try { dotWidth = asciiFont.widthOfTextAtSize('.', dotSize); } catch (e) {}
+
+                    if (dotWidth > 0) {
+                        const dotStartX = leftMargin + titleWidth + 5;
+                        const dotEndX = tocPage.getWidth() - rightMargin - pageNumWidth - 5;
+                        const availableDotSpace = dotEndX - dotStartX;
+                        if (availableDotSpace > dotWidth) {
+                            const numDots = Math.floor(availableDotSpace / dotWidth);
+                            const dotString = '.'.repeat(numDots);
+                            tocPage.drawText(dotString, {
+                                x: dotStartX, y: yPosition,
+                                size: dotSize, font: asciiFont, color: rgb(0, 0, 0), opacity: 0.5
+                            });
+                        }
+                    }
+
+                    // 儲存連結資訊
+                    tocLinkData.push({
+                        tocPage: tocPage,
+                        targetContentPageIndex: tocItem.entryIndex,
+                        linkRect: {
+                            x: leftMargin - 5,
+                            y: yPosition - 2,
+                            width: pageContentWidth + 10,
+                            height: Math.max(TOC_CONFIG.ITEM_TITLE_SIZE, TOC_CONFIG.ITEM_PAGENUM_SIZE) + 4
+                        }
+                    });
+
+                    yPosition -= TOC_CONFIG.LINE_HEIGHT;
+                }
+            }
+
+            // --- 頁碼（畫在內容頁右下角；編號要加上目錄頁數，所以等目錄排版完成才畫）---
+            // 頁碼是純 ASCII 數字，用 ASCII 字型與目錄同一條路徑（目錄的數字也是走 asciiFont）。
+            // 實測兩種寫法抽出的文字都正確，但統一路徑可避免只有某些檢視器／字型版本才踩到
+            // CJK 子集化的 glyph 對映問題。
+            if (addPageNumbers) {
+                contentEntries.forEach(({ page }, index) => {
+                    const { width, height } = page.getSize();
+                    if (width > 0 && height > 0) {
+                        page.drawText(`${index + 1 + tocPageCount}`, {
+                            x: width - 40, y: 30,
+                            size: 10, font: asciiFont, color: rgb(0, 0, 0)
+                        });
+                    }
+                });
+            }
+
             // --- 建立目錄超連結 ---
+            // 內容頁已經先合併完，目錄頁數也確定，所以連結目標＝目錄頁數＋內容頁序，
+            // 一定有對應的頁面（不再需要用「索引超界就跳過」來掩蓋位移）。
             if (addToc && tocLinkData.length > 0) {
                 progress.textContent = '正在建立目錄超連結...';
                 const allPages = newPdf.getPages();
-                
-                for (let i = 0; i < tocLinkData.length; i++) {
-                    const linkInfo = tocLinkData[i];
-                    const targetPageIndex = tocPages.length + linkInfo.targetContentPageIndex;
-                    
+
+                for (const linkInfo of tocLinkData) {
+                    const targetPageIndex = tocPageCount + linkInfo.targetContentPageIndex;
                     if (targetPageIndex >= allPages.length) continue;
-                    
                     const targetPage = allPages[targetPageIndex];
+                    const rect = linkInfo.linkRect;
                     try {
-                        const linkAnnot = linkInfo.tocPage.doc.context.obj({
+                        // 1) 先建立 annotation 並註冊，取得 PDFRef
+                        const annotRef = newPdf.context.register(newPdf.context.obj({
                             Type: 'Annot', Subtype: 'Link',
-                            Rect: [
-                                linkInfo.linkRect.x, linkInfo.linkRect.y,
-                                linkInfo.linkRect.x + linkInfo.linkRect.width,
-                                linkInfo.linkRect.y + linkInfo.linkRect.height
-                            ],
+                            Rect: [rect.x, rect.y, rect.x + rect.width, rect.y + rect.height],
                             Border: [0, 0, 0], C: [0, 0, 1],
                             A: { S: 'GoTo', D: [targetPage.ref, 'Fit'] }
-                        });
-                        const registeredAnnot = linkInfo.tocPage.doc.context.register(linkAnnot);
-                        let annots = linkInfo.tocPage.node.lookup(PDFName.of('Annots'));
-                        if (!annots) {
-                            annots = linkInfo.tocPage.doc.context.obj([]);
-                            linkInfo.tocPage.node.set(PDFName.of('Annots'), annots);
-                        }
-                        if (annots instanceof PDFArray || Array.isArray(annots.array)) {
-                            annots.push(registeredAnnot);
+                        }));
+                        // 2) 用節點 API 掛上去：addAnnot 內部會 lookupMaybe 既有的 Annots 陣列，
+                        //    沒有就建立，直接 push 未註冊的物件或寫回 ref 都不保險。
+                        if (typeof linkInfo.tocPage.node.addAnnot === 'function') {
+                            linkInfo.tocPage.node.addAnnot(annotRef);
+                        } else {
+                            let annots = linkInfo.tocPage.node.lookup(PDFName.of('Annots'));
+                            if (!annots || typeof annots.push !== 'function') {
+                                annots = newPdf.context.obj([]);
+                                linkInfo.tocPage.node.set(PDFName.of('Annots'), annots);
+                            }
+                            annots.push(annotRef);
                         }
                     } catch (linkError) {
-                        console.error(`無法建立超連結 (項目 ${i + 1}):`, linkError);
+                        console.error(`無法建立超連結 (目標頁 ${targetPageIndex + 1}):`, linkError);
                     }
                 }
             }
@@ -1558,6 +1814,9 @@ window.onload = function() {
             finalPdfBytes = pdfBytes;
             
             const blob = new Blob([finalPdfBytes], { type: 'application/pdf' });
+            // 前一次預覽的 blob 要先釋放：對話框已經開啟時 showModal() 不會觸發 close，
+            // 舊 URL 就永遠沒人回收（連續生成會一份一份累積，每份都是一整本 PDF）。
+            if (currentPreviewUrl) { URL.revokeObjectURL(currentPreviewUrl); currentPreviewUrl = null; }
             currentPreviewUrl = URL.createObjectURL(blob);
 
             document.getElementById('previewFrame').src = currentPreviewUrl;

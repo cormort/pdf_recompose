@@ -156,502 +156,38 @@
                 <h2>專案結構</h2>
                 <p>要運行此專案，您需要以下檔案結構：</p>
                 <pre><code>/
-|-- index.html         (主 HTML 檔案)
-|-- style.css          (CSS 樣式表)
-|-- script.js          (主要的 JavaScript 邏輯)
-|-- NotoSansTC-Regular.otf (思源黑體字型檔，用於目錄)
-|-- pdf.min.js         (pdf.js 函式庫主檔案)
-|-- pdf.worker.min.js  (pdf.js 的 Web Worker)
+|-- index.html            (主 HTML 檔案)
+|-- instruction.html      (本文件頁)
+|-- style.css             (CSS 樣式表)
+|-- script.js             (主要的 JavaScript 邏輯)
+|-- verify.mjs            (端到端驗證：node verify.mjs)
+|-- README.md
+|-- fonts/
+|   └─ NotoSansTC-Regular.ttf  (思源黑體，用於目錄與頁碼)
+|-- pdf.min.js            (pdf.js 主檔案)
+|-- pdf.worker.min.js     (pdf.js 的 Web Worker)
+|-- pdf-lib.min.js        (PDF 生成與編輯)
+|-- fontkit.umd.min.js    (字型子集化，供 pdf-lib 嵌入中文)
+|-- sortable.min.js       (拖曳排序)
+└─ examples/              (沒有內建；測試檔由 verify.mjs 即時產生)
 </code></pre>
             </div>
 
             <!-- 程式碼 Tab -->
             <div id="code" class="tab">
                 <h2>程式碼總覽</h2>
-                <p>以下是構成此工具的完整程式碼，包含詳細註解。</p>
+                <p>以下程式碼是<strong>執行時直接讀取 repo 內的實際檔案</strong>（<code>index.html</code>／<code>style.css</code>／<code>script.js</code>），
+                不是手抄的副本——手抄的版本曾經與程式碼嚴重脫節。請以本地伺服器開啟本頁（<code>python3 -m http.server</code>），
+                直接開檔（<code>file://</code>）會被 CORS 擋住而顯示載入失敗。</p>
                 
                 <h3>HTML (index.html)</h3>
-                <pre><code>&lt;!DOCTYPE html&gt;
-&lt;html lang="zh-TW"&gt;
-&lt;head&gt;
-    &lt;meta charset="UTF-8"&gt;
-    &lt;meta name="viewport" content="width=device-width, initial-scale=1.0"&gt;
-    &lt;title&gt;PDF 頁面重組工具 (專業目錄版)&lt;/title&gt;
-    
-    &lt;!-- 引用 pdf.js 函式庫，用於讀取和渲染 PDF 預覽 --&gt;
-    &lt;script src="./pdf.min.js"&gt;&lt;/script&gt; 
-    
-    &lt;!-- 引用 pdf-lib 函式庫，用於建立和修改 PDF 文件 --&gt;
-    &lt;script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"&gt;&lt;/script&gt;
-    &lt;!-- 引用 fontkit，配合 pdf-lib 嵌入中文字型 --&gt;
-    &lt;script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"&gt;&lt;/script&gt;
-
-    &lt;link rel="stylesheet" href="style.css"&gt;
-&lt;/head&gt;
-&lt;body&gt;
-    &lt;!-- 側邊欄：控制區域 --&gt;
-    &lt;div class="sidebar"&gt;
-        &lt;h2&gt;📄 PDF 頁面重組工具&lt;/h2&gt;
-        
-        &lt;!-- 檔案上傳區 --&gt;
-        &lt;div class="upload-area" id="uploadArea"&gt;
-            &lt;p style="margin-bottom: 10px;"&gt;📁 拖曳 PDF 檔案到這裡&lt;/p&gt;
-            &lt;p style="font-size: 12px; color: #bdc3c7; margin-bottom: 15px;"&gt;或&lt;/p&gt;
-            &lt;button class="btn btn-primary" onclick="document.getElementById('fileInput').click()"&gt;
-                選擇檔案
-            &lt;/button&gt;
-            &lt;input type="file" id="fileInput" accept="application/pdf" multiple&gt;
-        &lt;/div&gt;
-
-        &lt;!-- 已載入檔案清單 --&gt;
-        &lt;div&gt;
-            &lt;h2&gt;已載入檔案&lt;/h2&gt;
-            &lt;ul class="file-list" id="fileList"&gt;&lt;/ul&gt;
-            &lt;button class="btn btn-warning" id="clearFilesBtn" onclick="clearAllFiles()" style="margin-top: 10px;"&gt;
-                🗑️ 清除所有檔案
-            &lt;/button&gt;
-        &lt;/div&gt;
-
-        &lt;!-- 提示訊息 --&gt;
-        &lt;div class="note"&gt;
-            💡 提示：生成的 PDF 會保留原始文字，可以正常搜尋和複製。目錄使用思源黑體以支援中文顯示。
-        &lt;/div&gt;
-
-        &lt;!-- 進度條 --&gt;
-        &lt;div class="progress" id="progress"&gt;
-            &lt;div&gt;正在生成 PDF...&lt;/div&gt;
-        &lt;/div&gt;
-
-        &lt;!-- 生成選項 --&gt;
-        &lt;div class="options-group"&gt;
-            &lt;div&gt;
-                &lt;input type="checkbox" id="addTocCheckbox" checked&gt;
-                &lt;label for="addTocCheckbox"&gt;新增目錄頁 (會放在第一頁)&lt;/label&gt;
-            &lt;/div&gt;
-        &lt;/div&gt;
-
-        &lt;!-- 主操作按鈕 --&gt;
-        &lt;button class="btn btn-success" id="generateBtn" onclick="generatePDF()"&gt;
-            生成新的 PDF
-        &lt;/button&gt;
-    &lt;/div&gt;
-
-    &lt;!-- 主要內容區 --&gt;
-    &lt;div class="main-content"&gt;
-        &lt;!-- 來源 PDF 頁面面板 --&gt;
-        &lt;div class="source-panel" id="sourcePanel"&gt;
-            &lt;div class="panel-title"&gt;
-                &lt;span&gt;📑 原始 PDF 頁面&lt;/span&gt;
-                &lt;div class="panel-controls"&gt;
-                    &lt;!-- 預覽大小切換 --&gt;
-                    &lt;div class="toggle-group" id="size-toggle"&gt;
-                        &lt;button onclick="setThumbnailSize('small')"&gt;小&lt;/button&gt;
-                        &lt;button onclick="setThumbnailSize('medium')"&gt;中&lt;/button&gt;
-                        &lt;button onclick="setThumbnailSize('large')"&gt;大&lt;/button&gt;
-                        &lt;button onclick="setThumbnailSize('xlarge')"&gt;超大&lt;/button&gt;
-                    &lt;/div&gt;
-                    &lt;!-- 視圖模式切換 --&gt;
-                    &lt;div class="toggle-group"&gt;
-                        &lt;button id="gridViewBtn" class="active" onclick="setViewMode('grid')"&gt;縮圖&lt;/button&gt;
-                        &lt;button id="listViewBtn" onclick="setViewMode('list')"&gt;清單&lt;/button&gt;
-                    &lt;/div&gt;
-                    &lt;!-- 刪除頁面模式按鈕 --&gt;
-                    &lt;button id="editSourceBtn" class="btn-panel-action btn-edit" onclick="toggleSourceEditMode()"&gt;🗑️ 刪除頁面&lt;/button&gt;
-                &lt;/div&gt;
-            &lt;/div&gt;
-            &lt;div id="sourcePages"&gt;&lt;/div&gt;
-        &lt;/div&gt;
-
-        &lt;!-- 已選擇頁面面板 --&gt;
-        &lt;div class="target-panel"&gt;
-            &lt;div class="panel-title"&gt;
-                &lt;span&gt;📋 已選擇的頁面&lt;/span&gt;
-                &lt;div class="panel-controls"&gt;
-                    &lt;button class="btn-panel-action btn-add-section" onclick="addSectionDivider()"&gt;➕ 新增小節&lt;/button&gt;
-                    &lt;button class="btn-panel-action btn-edit" onclick="openTocEditor()"&gt;✏️ 批次編輯目錄&lt;/button&gt;
-                    &lt;button id="clearSelectedBtn" class="btn-panel-action btn-clear" onclick="clearSelectedPages()"&gt;🗑️ 清除選取&lt;/button&gt;
-                &lt;/div&gt;
-            &lt;/div&gt;
-            &lt;div class="selected-pages" id="selectedPages"&gt;&lt;/div&gt;
-        &lt;/div&gt;
-    &lt;/div&gt;
-
-    &lt;!-- 目錄批次編輯彈窗 (Modal) --&gt;
-    &lt;div class="modal-overlay" id="tocModal"&gt;
-        &lt;div class="modal-content"&gt;
-            &lt;h3&gt;批次編輯目錄&lt;/h3&gt;
-            &lt;p style="font-size: 13px; color: #7f8c8d;"&gt;請在下方編輯目錄，一行代表一頁。完成後請確保總行數與選擇的頁數相同。&lt;/p&gt;
-            &lt;textarea id="tocTextarea"&gt;&lt;/textarea&gt;
-            &lt;div class="modal-actions"&gt;
-                &lt;button class="btn" onclick="closeTocEditor()"&gt;取消&lt;/button&gt;
-                &lt;button class="btn btn-primary" onclick="saveToc()"&gt;儲存變更&lt;/button&gt;
-            &lt;/div&gt;
-        &lt;/div&gt;
-    &lt;/div&gt;
-
-    &lt;script src="script.js"&gt;&lt;/script&gt;
-&lt;/body&gt;
-&lt;/html&gt;
-</code></pre>
+                <pre><code data-src="index.html">載入中…</code></pre>
 
                 <h3>CSS (style.css)</h3>
-                <pre><code>/* --- 整體佈局 --- */
-body {
-    margin: 0;
-    font-family: sans-serif;
-    display: flex;
-    height: 100vh;
-    overflow: hidden;
-    background-color: #ecf0f1;
-}
-
-.sidebar {
-    width: 320px;
-    background-color: #2c3e50;
-    color: #ecf0f1;
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    overflow-y: auto;
-}
-
-.main-content {
-    flex-grow: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-}
-
-/* --- 面板樣式 --- */
-.source-panel, .target-panel {
-    display: flex;
-    flex-direction: column;
-    background-color: #ffffff;
-    border-bottom: 2px solid #e0e0e0;
-}
-.source-panel { flex: 1; overflow-y: auto; }
-.target-panel { height: 40%; overflow-y: auto; box-shadow: 0 -4px 10px rgba(0,0,0,0.05); }
-
-.panel-title {
-    background-color: #f8f9fa;
-    padding: 10px 15px;
-    font-weight: bold;
-    color: #34495e;
-    border-bottom: 1px solid #dee2e6;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    position: sticky;
-    top: 0;
-    z-index: 10;
-}
-
-.panel-controls { display: flex; align-items: center; gap: 10px; }
-
-#sourcePages, .selected-pages { padding: 15px; }
-
-/* --- 按鈕 --- */
-.btn {
-    padding: 8px 15px;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 14px;
-    transition: background-color 0.2s;
-}
-.btn-primary { background-color: #3498db; color: white; }
-.btn-primary:hover { background-color: #2980b9; }
-.btn-success { width: 100%; padding: 12px; font-size: 16px; background-color: #2ecc71; color: white; margin-top: auto; }
-.btn-success:hover { background-color: #27ae60; }
-.btn-warning { background-color: #f39c12; color: white; }
-.btn-warning:hover { background-color: #e67e22; }
-.btn-danger { background-color: #e74c3c; color: white; font-size: 12px; padding: 4px 8px;}
-.btn-danger:hover { background-color: #c0392b; }
-
-/* --- 上傳區域 --- */
-.upload-area {
-    border: 2px dashed #3498db;
-    border-radius: 5px;
-    padding: 20px;
-    text-align: center;
-    margin-bottom: 20px;
-    background-color: #34495e;
-}
-.upload-area.drag-over { background-color: #4e6a85; }
-#fileInput { display: none; }
-
-/* --- 檔案列表 --- */
-.file-list { list-style: none; padding: 0; }
-.file-list-item { display: flex; justify-content: space-between; align-items: center; padding: 5px; background: #34495e; margin-bottom: 5px; border-radius: 3px;}
-
-/* --- 來源頁面 (縮圖模式) --- */
-.pages-grid { display: grid; gap: 15px; }
-.size-small .pages-grid { grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); }
-.size-medium .pages-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
-.size-large .pages-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
-.size-xlarge .pages-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
-
-.page-item {
-    border: 2px solid #ddd;
-    border-radius: 4px;
-    cursor: pointer;
-    position: relative;
-    overflow: hidden;
-    transition: all 0.2s;
-}
-.page-item:hover { border-color: #3498db; transform: translateY(-2px); }
-.page-item.selected { border-color: #2ecc71; box-shadow: 0 0 10px rgba(46, 204, 113, 0.5); }
-.page-item canvas { width: 100%; height: auto; display: block; }
-.page-number {
-    position: absolute;
-    bottom: 0;
-    right: 0;
-    background: rgba(0,0,0,0.6);
-    color: white;
-    padding: 2px 6px;
-    font-size: 11px;
-    border-top-left-radius: 4px;
-}
-
-/* --- 已選擇頁面 --- */
-.selected-page-item, .selected-divider-item {
-    display: flex;
-    align-items: center;
-    padding: 10px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    margin-bottom: 8px;
-    background: #f9f9f9;
-}
-.drag-handle { cursor: grab; margin-right: 10px; color: #95a5a6; }
-.selected-page-item.dragging { opacity: 0.5; }
-
-.selected-page-item canvas { width: 40px; height: auto; margin-right: 10px; border: 1px solid #ddd; }
-.selected-page-info { flex-grow: 1; }
-.selected-page-title { font-weight: bold; font-size: 14px; }
-.selected-page-source { font-size: 12px; color: #7f8c8d; }
-
-.selected-divider-title { font-weight: bold; color: #2980b9; flex-grow: 1; }
-
-/* --- Modal 彈窗 --- */
-.modal-overlay {
-    position: fixed;
-    top: 0; left: 0;
-    width: 100%; height: 100%;
-    background: rgba(0,0,0,0.6);
-    display: none; /* Initially hidden */
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-}
-.modal-content {
-    background: white;
-    padding: 30px;
-    border-radius: 8px;
-    width: 600px;
-    max-width: 90%;
-}
-#tocTextarea { width: 100%; height: 400px; margin: 15px 0; font-family: monospace; }
-.modal-actions { text-align: right; }
-.modal-actions .btn { margin-left: 10px; }
-</code></pre>
+                <pre><code data-src="style.css">載入中…</code></pre>
                 
                 <h3>JavaScript (script.js)</h3>
-                <pre><code>// ==========================================================
-// ===         *** 本地檔案 ***
-// === 確保所有函式庫 (包含本地 pdf.min.js) 都載入後才執行
-// ==========================================================
-window.onload = function() {
-
-    // --- 設定 workerSrc 指向本地檔案 ---
-    pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.js';
-
-    // --- 全域變數定義 ---
-    let pdfFiles = []; // 儲存已載入的 PDF 檔案物件
-    let selectedPages = []; // 儲存使用者選擇的頁面
-    let draggedElement = null; // 用於拖曳排序
-    let viewMode = 'grid'; // 'grid' 或 'list'
-    let thumbnailSize = 'medium'; // 'small', 'medium', 'large', 'xlarge'
-    let lastSelectedIndex = null; // 用於 Shift 連續選取
-    let clearFilesConfirmMode = false; // 清除檔案的二次確認模式
-    let clearSelectedConfirmMode = false; // 清除選取的二次確認模式
-    let isSourceEditMode = false; // 是否處於來源頁面刪除模式
-
-    // --- 檢查核心函式庫是否存在 ---
-    if (typeof PDFLib === 'undefined') {
-        console.error("CRITICAL: PDFLib is not defined when onload executes!");
-        alert("錯誤：PDF 編輯函式庫 (pdf-lib.min.js) 載入失敗，請檢查網路連線。");
-        return;
-    }
-     if (typeof fontkit === 'undefined') {
-        console.error("CRITICAL: fontkit is not defined when onload executes!");
-        alert("錯誤：字型工具函式庫 (fontkit.umd.min.js) 載入失敗，請檢查網路連線。");
-        return; 
-    }
-
-    // --- 獲取 DOM 元素 ---
-    const uploadArea = document.getElementById('uploadArea');
-    const fileInput = document.getElementById('fileInput');
-    const fileList = document.getElementById('fileList');
-    const sourcePanel = document.getElementById('sourcePanel');
-    const sourcePages = document.getElementById('sourcePages');
-    const selectedPagesContainer = document.getElementById('selectedPages');
-    const progress = document.getElementById('progress');
-    const tocModal = document.getElementById('tocModal');
-    const tocTextarea = document.getElementById('tocTextarea');
-    const addTocCheckbox = document.getElementById('addTocCheckbox');
-
-    // --- 事件監聽 ---
-    uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('drag-over'); });
-    uploadArea.addEventListener('dragleave', () => { uploadArea.classList.remove('drag-over'); });
-    uploadArea.addEventListener('drop', (e) => {
-        e.preventDefault();
-        uploadArea.classList.remove('drag-over');
-        const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
-        handleFiles(files);
-    });
-    fileInput.addEventListener('change', (e) => { handleFiles(Array.from(e.target.files)); });
-
-    /**
-     * 處理上傳的 PDF 檔案
-     * @param {File[]} files - 使用者選擇的檔案陣列
-     */
-    async function handleFiles(files) {
-        if (files.length === 0) return;
-        
-        progress.textContent = `⏳ 正在載入 ${files.length} 個檔案...`;
-        progress.classList.add('active');
-
-        for (const file of files) {
-            const fileData = { name: file.name, file: file, pages: [], pdfDoc: null };
-            try {
-                const arrayBuffer = await file.arrayBuffer();
-                const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-                fileData.pdfDoc = pdf;
-                for (let i = 1; i <= pdf.numPages; i++) {
-                    const page = await pdf.getPage(i);
-                    // 產生預覽圖
-                    const canvas = document.createElement('canvas');
-                    const context = canvas.getContext('2d');
-                    const viewport = page.getViewport({ scale: 0.5 });
-                    canvas.width = viewport.width;
-                    canvas.height = viewport.height;
-                    await page.render({ canvasContext: context, viewport: viewport }).promise;
-                    
-                    // 提取頁面標題
-                    const title = await extractTitleFromPage(page, i);
-                    fileData.pages.push({ pageNum: i, canvas: canvas, firstLine: title });
-                }
-                pdfFiles.push(fileData);
-            } catch (error) {
-                console.error(`處理檔案 "${file.name}" 失敗:`, error);
-                alert(`處理檔案 "${file.name}" 失敗，檔案可能已損毀或函式庫載入不完整。`);
-            }
-        }
-        updateFileList();
-        renderSourcePages();
-
-        progress.textContent = '✅ 檔案載入完成！';
-        setTimeout(() => { progress.classList.remove('active'); }, 2000);
-    }
-    
-    // ... 此處省略 extractTitleFromPage, updateFileList, removeFile, clearAllFiles, setViewMode, etc. 的完整程式碼，因為它們過於冗長。
-    // 在真實的 script.js 檔案中，這些函式都包含在內。
-    // 以下為最重要的生成 PDF 函式
-    
-    /**
-     * 生成最終的 PDF 檔案
-     */
-    async function generatePDF() {
-         if (typeof PDFLib === 'undefined' || typeof PDFLib.PDFDocument === 'undefined') {
-            alert("錯誤：無法生成 PDF，編輯函式庫載入失敗。");
-            return;
-        }
-
-        const { PDFDocument, rgb, StandardFonts } = PDFLib;
-        const pageItems = selectedPages.filter(p => p && p.type !== 'divider');
-        if (pageItems.length === 0) {
-            alert('請至少選擇一個頁面');
-            return;
-        }
-
-        try {
-            progress.textContent = '⏳ 正在準備生成 PDF...';
-            progress.classList.add('active');
-            
-            const newPdf = await PDFDocument.create();
-            let customFont;
-
-            // 載入中文字型
-            try {
-                progress.textContent = '正在載入中文字型...';
-                const fontUrl = './NotoSansTC-Regular.otf';
-                const fontBytes = await fetch(fontUrl).then(res => res.arrayBuffer());
-                newPdf.registerFontkit(fontkit); 
-                customFont = await newPdf.embedFont(fontBytes);
-            } catch (fontError) {
-                 alert(`警告：無法載入本地字型檔案。目錄將使用英文字型顯示（中文會變亂碼）。`);
-                 customFont = await newPdf.embedFont(StandardFonts.Helvetica);
-            }
-            
-            const addToc = addTocCheckbox.checked;
-            let pageOffset = addToc ? 1 : 0; 
-
-            // 如果需要，建立目錄頁
-            if (addToc) {
-                progress.textContent = '正在建立目錄頁...';
-                // ... (此處是繪製目錄的詳細邏輯)
-            }
-
-            // 複製選擇的頁面到新 PDF
-            let pageCounterForContent = 0;
-            for (const item of selectedPages) {
-                if (!item || item.type === 'divider') continue;
-                pageCounterForContent++;
-                progress.textContent = `正在合併頁面 (${pageCounterForContent}/${pageItems.length})...`;
-                
-                const sourceFile = pdfFiles[item.fileIndex];
-                const freshArrayBuffer = await sourceFile.file.arrayBuffer();
-                const sourcePdf = await PDFDocument.load(freshArrayBuffer, { ignoreEncryption: true });
-                const [copiedPage] = await newPdf.copyPages(sourcePdf, [item.pageNum - 1]);
-                newPdf.addPage(copiedPage);
-
-                // 在新頁面底部加上頁碼
-                const newPageNumber = `${pageCounterForContent + pageOffset}`;
-                const { width, height } = copiedPage.getSize();
-                copiedPage.drawText(newPageNumber, { x: width - 40, y: 30, size: 10, font: customFont, color: rgb(0, 0, 0) });
-            }
-
-            progress.textContent = '正在儲存 PDF...';
-            
-            // 生成 PDF 的二進位資料
-            let pdfBytes = await newPdf.save();
-            
-            // --- 下載邏輯 ---
-            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            const defaultFileName = '重組後的PDF_' + new Date().toISOString().slice(0, 10) + '.pdf';
-            let finalFileName = prompt("請確認檔案名稱：", defaultFileName) || defaultFileName;
-            a.download = finalFileName.endsWith('.pdf') ? finalFileName : finalFileName + '.pdf';
-            a.click();
-            URL.revokeObjectURL(url);
-
-            progress.textContent = '✅ PDF 生成成功！';
-            setTimeout(() => progress.classList.remove('active'), 5000);
-
-        } catch (error) {
-             console.error('生成 PDF 時發生錯誤：', error);
-            progress.textContent = '❌ 生成失敗：' + error.message;
-        }
-    }
-    
-    // 將需要從 HTML onclick 呼叫的函式掛載到 window 物件上
-    window.generatePDF = generatePDF;
-    // ... 其他函式也需要掛載
-};
-</code></pre>
+                <pre><code data-src="script.js">載入中…</code></pre>
             </div>
 
             <!-- 使用說明 Tab -->
@@ -696,10 +232,10 @@ window.onload = function() {
                         <h3>第四步：生成最終的 PDF</h3>
                         <p>完成所有整理後，點擊左下角的綠色按鈕「<strong>生成新的 PDF</strong>」。</p>
                         <ul>
-                            <li><strong>新增目錄頁：</strong>請確保「新增目錄頁」的選項是勾選的（預設為勾選），這樣生成的 PDF 第一頁纔會有目錄。</li>
-                            <li><strong>命名檔案：</strong>點擊生成按鈕後，系統會彈出一個視窗讓您確認最終的檔案名稱。</li>
+                            <li><strong>新增目錄頁：</strong>勾選「新增目錄頁」後，生成的 PDF 第一頁（跨頁時為前幾頁）會有目錄與可點擊的頁碼連結；勾選「新增頁碼」則會在每一頁右下角印上頁碼。</li>
+                            <li><strong>先預覽再下載：</strong>點擊生成後會先開啟預覽視窗（直接顯示產出的 PDF），確認無誤再按「下載 PDF」。</li>
+                            <li><strong>命名檔案：</strong>按下載時會彈出視窗讓您確認檔名，確認後瀏覽器才開始下載。</li>
                         </ul>
-                        <p>確認後，瀏覽器會開始處理並自動下載合併完成的 PDF 檔案。</p>
                     </li>
                 </ol>
 
@@ -739,6 +275,21 @@ window.onload = function() {
 
         // 預設打開第一個頁籤
         document.getElementById("defaultOpen").click();
+
+        // 程式碼總覽：直接讀取 repo 內的實際檔案，避免文件與程式碼各寫一份而漂移。
+        // 用 textContent 填入（瀏覽器自動跳脫），失敗時顯示原因而不是留著空白。
+        (async () => {
+            for (const block of document.querySelectorAll('pre code[data-src]')) {
+                const src = block.dataset.src;
+                try {
+                    const res = await fetch('./' + src, { cache: 'no-cache' });
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    block.textContent = await res.text();
+                } catch (e) {
+                    block.textContent = `無法讀取 ${src}（${e.message}）。請以本地伺服器開啟本頁，例如：python3 -m http.server`;
+                }
+            }
+        })();
     </script>
 
 </body>

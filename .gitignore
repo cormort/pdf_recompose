@@ -1,3 +1,9 @@
 # 本機工具設定（Claude Code 等）
 .claude/
 .DS_Store
+
+# 探索用的臨時腳本（正式驗證請用 verify.mjs；這些只是開發過程的除錯小工具）
+scratch-*.mjs
+
+# 驗證用的相依套件（verify.mjs 會用 PW_MODULE 指向既有安裝，不強制安裝在這裡）
+node_modules/
