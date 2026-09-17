@@ -666,7 +666,10 @@
     <dialog class="modal-content" id="tocModal">
         <h3>批次編輯目錄</h3>
         <p class="modal-hint">請在下方編輯目錄，一行代表一頁。完成後請確保總行數與選擇的頁數相同。<br>
-        行首<strong>每 2 個空白代表縮一層</strong>（同時決定目錄頁縮排與書籤階層）。</p>
+        行首<strong>每 2 個空白代表縮一層</strong>（同時決定目錄頁縮排與書籤階層）。<br>
+        想讓某個小節改用不同編號（例如附錄用羅馬數字）時，在該行行首加上標記：
+        <code>[roman-lower]</code>、<code>[roman-upper]</code>、<code>[chinese]</code>、
+        <code>[alpha-lower]</code>、<code>[alpha-upper]</code>；同一小節內會沿用，編號在每個小節重新起算。</p>
         <textarea id="tocTextarea"></textarea>
         <div class="modal-actions">
             <button class="btn btn-aux" id="prefillTocBtn" onclick="prefillTocFromSource()">🔖 帶入來源書籤</button>

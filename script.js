@@ -170,6 +170,21 @@ window.onload = function() {
     window.resetSplitSettings = resetSplitSettings;
     // 驗證用：把最後一個小節移到最前面（等同拖曳），讓「開頭小節」的情境可測
     // 驗證用：目前右側的分組（每個小節含哪些頁）
+    // 驗證用：編號方案的純函式（轉換規則用單元檢查最直接）
+    window.__numbering = { formatNumberByScheme, toRomanNumeral, toChineseNumeral, toAlphaNumeral, computePageLabels };
+    // 驗證用：目前每一頁的編號字串（分節編號）
+    window.getPageLabels = () => {
+        const entries = [];
+        let section = 0;
+        let inherited = null;
+        for (const item of selectedPages) {
+            if (!item) continue;
+            if (item.type === 'divider') { section++; continue; }
+            if (item.scheme) inherited = item.scheme;
+            entries.push({ restartKey: `s${section}`, scheme: inherited });
+        }
+        return computePageLabels(entries);
+    };
     window.getRawOrder = () => selectedPages.map(i => i.type === 'divider' ? `D:${i.firstLine}` : `P${i.pageNum}`);
     window.getSectionGroups = () => groupPagesBySection(selectedPages).map(g => ({
         title: g.title, pages: g.items.map(i => i.pageNum),
@@ -817,6 +832,85 @@ window.onload = function() {
             });
         }
         return marks;
+    }
+
+    // ---- 編號方案（頁碼可以分節使用不同格式，例如正文用阿拉伯數字、附錄用羅馬數字）----
+    const NUMBERING_SCHEMES = {
+        decimal: '1, 2, 3',
+        'roman-lower': 'i, ii, iii',
+        'roman-upper': 'I, II, III',
+        chinese: '一, 二, 三',
+        'alpha-lower': 'a, b, c',
+        'alpha-upper': 'A, B, C',
+    };
+
+    const ROMAN_TABLE = [[1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'],
+        [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']];
+
+    function toRomanNumeral(n) {
+        if (!Number.isFinite(n) || n <= 0) return String(n);
+        let out = '', v = Math.floor(n);
+        for (const [val, sym] of ROMAN_TABLE) { while (v >= val) { out += sym; v -= val; } }
+        return out;
+    }
+
+    // 中文數字（1..9999）：10 → 十、11 → 十一、101 → 一百〇一、2024 → 二千〇二十四
+    function toChineseNumeral(n) {
+        if (!Number.isFinite(n) || n <= 0 || n >= 10000) return String(n);
+        const digits = '〇一二三四五六七八九';
+        const units = ['', '十', '百', '千'];
+        const str = String(Math.floor(n));
+        let out = '';
+        for (let i = 0; i < str.length; i++) {
+            const digit = Number(str[i]);
+            const unitIndex = str.length - 1 - i;
+            if (digit === 0) {
+                // 連續的 0 只補一個「〇」，結尾不留
+                if (out !== '' && !out.endsWith('〇') && i < str.length - 1) out += '〇';
+                continue;
+            }
+            // 十位數的 1 不加「一」（10 → 十、15 → 十五）
+            if (!(digit === 1 && unitIndex === 1 && out === '')) out += digits[digit];
+            out += units[unitIndex];
+        }
+        return out.replace(/〇+$/, '') || '〇';
+    }
+
+    function toAlphaNumeral(n, upper) {
+        if (!Number.isFinite(n) || n <= 0) return String(n);
+        let out = '', v = Math.floor(n);
+        while (v > 0) {
+            const r = (v - 1) % 26;
+            out = String.fromCharCode((upper ? 65 : 97) + r) + out;
+            v = Math.floor((v - 1) / 26);
+        }
+        return out;
+    }
+
+    function formatNumberByScheme(value, scheme) {
+        switch (scheme) {
+            case 'roman-lower': return toRomanNumeral(value).toLowerCase();
+            case 'roman-upper': return toRomanNumeral(value);
+            case 'chinese': return toChineseNumeral(value);
+            case 'alpha-lower': return toAlphaNumeral(value, false);
+            case 'alpha-upper': return toAlphaNumeral(value, true);
+            default: return String(value);
+        }
+    }
+
+    // 每一頁在「自己所屬群組」裡的編號字串。編號會在群組的第一頁重新起算，
+    // 這樣「正文用 1,2,3、附錄重新用 i,ii,iii」才做得出來。
+    function computePageLabels(entries) {
+        const labels = [];
+        let previousKey = null;
+        let counter = 0;
+        for (const entry of entries) {
+            const key = entry.restartKey === undefined ? null : entry.restartKey;
+            if (key !== previousKey) { counter = 0; previousKey = key; }
+            counter++;
+            labels.push(formatNumberByScheme(counter, entry.scheme));
+        }
+        return labels;
     }
 
     // {n} 目前頁碼、{total} 總頁數、{name} 來源檔名、{date} 日期。
@@ -2768,6 +2862,16 @@ window.onload = function() {
     // ======================================================
 
     // 縮排 ↔ 階層：行首每 2 個空白算一層（上限 5 層，避免誤貼大段空白爆掉）
+    // 目錄編輯器的行首語法：[roman-lower] 之類的標記代表「從這裡開始用這個編號方案」，
+    // 只有頁面行會有作用；標記本身不佔行數。
+    function schemeFromLine(rawLine) {
+        const match = String(rawLine).match(/^\s*\[([a-z-]+)\]\s*/i);
+        if (!match) return { scheme: null, rest: rawLine };
+        const key = match[1].toLowerCase();
+        if (!NUMBERING_SCHEMES[key]) return { scheme: null, rest: rawLine };
+        return { scheme: key, rest: String(rawLine).slice(match[0].length) };
+    }
+
     function levelFromIndent(line) {
         const match = line.match(/^[ \t]*/);
         const indent = match ? match[0].replace(/\t/g, '  ').length : 0;
@@ -2781,7 +2885,11 @@ window.onload = function() {
             return;
         }
         const titles = pageItems
-            .map(p => '  '.repeat(p.level || 0) + (p.firstLine || `Page ${p.pageNum || '?'}`))
+            .map(p => {
+                // 有指定編號方案時帶出標記，使用者才看得到目前設定
+                const tag = p.scheme ? `[${p.scheme}] ` : '';
+                return tag + '  '.repeat(p.level || 0) + (p.firstLine || `Page ${p.pageNum || '?'}`);
+            })
             .join('\n');
         tocTextarea.value = titles;
         tocModal.showModal();
@@ -2827,10 +2935,14 @@ window.onload = function() {
         applyEdit('編輯目錄', () => {
             selectedPages.forEach(item => {
                 if (item && item.type !== 'divider') {
-                    const line = rawLines[titleIndex];
-                    const title = line.replace(/^[ \t]+/, '').trim();
+                    const raw = rawLines[titleIndex] || '';
+                    // 行首的 [scheme] 標記決定編號方案（同一小節內沿用，不佔行數）
+                    const parsed = schemeFromLine(raw);
+                    if (parsed.scheme) item.scheme = parsed.scheme;
+                    else delete item.scheme;
+                    const title = parsed.rest.replace(/^[ \t]+/, '').trim();
                     item.firstLine = title || `Page ${item.pageNum || '?'}`;
-                    item.level = levelFromIndent(line);
+                    item.level = levelFromIndent(parsed.rest);
                     titleIndex++;
                 }
             });
@@ -3380,6 +3492,38 @@ window.onload = function() {
             // --- 頁面標記：頁首／頁尾／頁碼 ---
             // 三者共用變數替換與位置計算，所以在這裡一次畫完。
             // 時機：目錄頁數已確定（{total} 要含目錄頁）、且在其他內容之後，標記才不會被蓋掉。
+            //
+            // {n} 支援分節編號（正文用 1,2,3、附錄用 i,ii,iii）。規則刻意保持單純可預期：
+            //   * 編號在每個小節的第一頁重新起算
+            //   * 沒有小節時整份連續編號（與原本行為相同）
+            //   * 編號方案由目錄編輯器的行首標記指定（例如 [roman-lower]），同一小節內沿用，
+            //     後續頁面不需要重複標記
+            // 有沒有小節，決定 {n} 的語意：
+            //   沒有小節 → 整份連續編號，且含目錄頁位移（與這功能加入前的行為一致）
+            //   有小節   → 每個小節重新起算，並依該小節指定的方案編號
+            // 這樣「原本就用得好好的文件」不會因為新功能而改變頁碼。
+            const hasSections = selectedPages.some(item => item && item.type === 'divider');
+            {
+                let section = 0;
+                let contentIdx = 0;
+                let inheritedScheme = null;
+                for (const item of selectedPages) {
+                    if (!item) continue;
+                    if (item.type === 'divider') { section++; continue; }
+                    if (contentIdx >= contentEntries.length) break;
+                    const entry = contentEntries[contentIdx];
+                    entry.restartKey = hasSections ? `s${section}` : 'all';
+                    if (item.scheme) inheritedScheme = item.scheme;
+                    entry.scheme = inheritedScheme;
+                    contentIdx++;
+                }
+            }
+            const pageLabels = computePageLabels(contentEntries);
+            // 沒有小節時，{n} 維持「含目錄頁位移的實體頁序」
+            if (!hasSections) {
+                contentEntries.forEach((entry, index) => { pageLabels[index] = String(index + 1 + tocPageCount); });
+            }
+
             if (addMarks) {
                 const marks = readMarksConfig();
                 if (marks.length > 0) {
@@ -3393,7 +3537,8 @@ window.onload = function() {
                         if (!(width > 0 && height > 0)) return;
                         for (const mark of marks) {
                             const label = formatPageNumber(mark.format, {
-                                n: index + 1 + tocPageCount,
+                                // {n} 用分節編號（未指定方案時就是 1,2,3...）
+                                n: pageLabels[index] !== undefined ? pageLabels[index] : index + 1 + tocPageCount,
                                 // {total} 含目錄頁：使用者看到的實體總頁數
                                 total: totalPages,
                                 name: item.fileName || '',

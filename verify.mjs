@@ -412,14 +412,19 @@ const texts = await page.evaluate(async (b64) => {
 const tocText = texts.slice(0, tocPageCount).join(' ');
 check(/目錄/.test(tocText), '目錄頁標題可被抽取（中文字型正常）', tocText.slice(0, 60));
 check(/第一部分/.test(tocText), '小節標題出現在目錄上', tocText.slice(0, 80));
-// 目錄上的頁碼與內容頁的頁碼都必須抽得出來，而且是正確的數字
+// 目錄上的頁碼與內容頁的頁碼都必須抽得出來。
+// 這份文件的順序是 P P P D P P（補了一張在最後，所以它在小節之後）。
+// 採分節編號後，小節之後的那一頁會重新從 1 起算，所以出現的編號是 1..4，
+// 而不是連續的 1..5 —— 這是刻意的語意，不是漏印。
 const expectedNumbers = [];
-for (let n = 1; n <= targetPagesAfterSection; n++) expectedNumbers.push(String(n + tocPageCount));
+for (let n = 1; n <= targetPagesAfterSection - 1; n++) expectedNumbers.push(String(n));
 const contentTexts = texts.slice(tocPageCount);
 const missingContentNums = expectedNumbers.filter(n => !contentTexts.some(t => t.includes(n)));
 check(missingContentNums.length === 0, '內容頁的頁碼可用文字抽取（搜尋／複製正常）', `缺 ${missingContentNums.join(',')}`);
 const missingTocNums = expectedNumbers.filter(n => !tocText.includes(n));
 check(missingTocNums.length === 0, '目錄上的頁碼可用文字抽取', `缺 ${missingTocNums.join(',')}`);
+// 目錄頁本身不應該被編號（它是封面性質，不屬於任何小節）
+check(!texts.slice(0, tocPageCount).some(t => /^\s*0\s*$/.test(t)), '目錄頁不會被編號');
 
 // ── 6. 記憶體回歸：載入後不得留下 canvas ──
 const canvases = await page.evaluate(() => document.querySelectorAll('canvas').length);
@@ -1650,6 +1655,117 @@ await page12.waitForFunction(() => /預覽生成成功|生成失敗/.test(docume
 check(/預覽生成成功/.test(await page12.textContent('#progress')), '關閉拆檔後回到單檔預覽流程');
 
 check(errors12.length === 0, '拆檔流程沒有 pageerror／console error', errors12.slice(0, 2).join(' | '));
+
+// ── 23. 分節頁碼編號方案 ──
+const page13 = await browser.newPage();
+const errors13 = [];
+page13.on('pageerror', e => errors13.push('PAGEERROR ' + e.message));
+page13.on('console', m => { if (m.type() === 'error') errors13.push('CONSOLE ' + m.text().slice(0, 200)); });
+await page13.goto(BASE + '/index.html', { waitUntil: 'load' });
+await page13.evaluate(() => new Promise(r => { const q = indexedDB.deleteDatabase('pdf-recompose'); q.onsuccess = q.onerror = q.onblocked = () => r(); }));
+await page13.reload({ waitUntil: 'load' });
+await page13.waitForTimeout(400);
+
+// 轉換規則：純函式單元檢查（比從 PDF 反推直接得多）
+const conversions = await page13.evaluate(() => {
+    const f = window.__numbering.formatNumberByScheme;
+    return {
+        decimal: [1, 2, 3, 10].map(n => f(n, 'decimal')),
+        romanLower: [1, 4, 9, 14, 40].map(n => f(n, 'roman-lower')),
+        romanUpper: [1, 4, 9, 14].map(n => f(n, 'roman-upper')),
+        chinese: [1, 10, 11, 20, 27, 101, 2024].map(n => f(n, 'chinese')),
+        alphaLower: [1, 26, 27].map(n => f(n, 'alpha-lower')),
+        alphaUpper: [1, 26, 27].map(n => f(n, 'alpha-upper')),
+    };
+});
+check(JSON.stringify(conversions.decimal) === JSON.stringify(['1', '2', '3', '10']), '十進位編號正確', JSON.stringify(conversions.decimal));
+check(JSON.stringify(conversions.romanLower) === JSON.stringify(['i', 'iv', 'ix', 'xiv', 'xl']), '小寫羅馬數字正確', JSON.stringify(conversions.romanLower));
+check(JSON.stringify(conversions.romanUpper) === JSON.stringify(['I', 'IV', 'IX', 'XIV']), '大寫羅馬數字正確', JSON.stringify(conversions.romanUpper));
+check(JSON.stringify(conversions.chinese) === JSON.stringify(['一', '十', '十一', '二十', '二十七', '一百〇一', '二千〇二十四']),
+    '中文數字正確（含十位數的「十」與中間的〇）', JSON.stringify(conversions.chinese));
+check(JSON.stringify(conversions.alphaLower) === JSON.stringify(['a', 'z', 'aa']) &&
+      JSON.stringify(conversions.alphaUpper) === JSON.stringify(['A', 'Z', 'AA']),
+    '字母編號正確（含進位）', JSON.stringify({ lower: conversions.alphaLower, upper: conversions.alphaUpper }));
+
+// 分節編號：4 頁 + 兩個小節（正文 2 頁、附錄 2 頁）
+await page13.setInputFiles('#fileInput', [fixtureMark4], { timeout: 20000 });
+await page13.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
+await page13.evaluate(() => {
+    document.querySelectorAll('dialog[open]').forEach(d => { if (d.id !== 'previewModal') d.close(); });
+    const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb);
+    batchAddToTarget();
+});
+await page13.waitForTimeout(250);
+for (const [title, targetIndex] of [['正文', 0], ['附錄', 3]]) {
+    await page13.evaluate(() => { addSectionDivider(); });
+    await page13.waitForSelector('#askDialog[open]', { timeout: 5000 });
+    await page13.fill('#askDialogInput', title);
+    await page13.click('#askDialogOk');
+    await page13.waitForTimeout(200);
+    await page13.evaluate((idx) => window.moveLastItemTo(idx), targetIndex);
+    await page13.waitForTimeout(200);
+}
+check(JSON.stringify(await page13.evaluate(() => window.getRawOrder())) ===
+      JSON.stringify(['D:正文', 'P1', 'P2', 'D:附錄', 'P3', 'P4']),
+    '準備好兩節（正文 2 頁、附錄 2 頁）', JSON.stringify(await page13.evaluate(() => window.getRawOrder())));
+
+// 預設：每個小節重新起算
+check(JSON.stringify(await page13.evaluate(() => window.getPageLabels())) === JSON.stringify(['1', '2', '1', '2']),
+    '預設編號在每個小節重新起算', JSON.stringify(await page13.evaluate(() => window.getPageLabels())));
+
+// 附錄改用羅馬數字
+await page13.evaluate(() => { openTocEditor(); });
+await page13.waitForSelector('#tocModal[open]', { timeout: 5000 });
+const tocLines = (await page13.inputValue('#tocTextarea')).split('\n');
+check(tocLines.length === 4, '目錄編輯器列出 4 頁', JSON.stringify(tocLines));
+await page13.fill('#tocTextarea', tocLines.map((l, i) => i === 2 ? `[roman-lower] ${l}` : l).join('\n'));
+await page13.click('button:has-text("儲存變更")');
+await page13.waitForTimeout(300);
+check(JSON.stringify(await page13.evaluate(() => window.getPageLabels())) === JSON.stringify(['1', '2', 'i', 'ii']),
+    '附錄套用 [roman-lower] 後變成 i、ii', JSON.stringify(await page13.evaluate(() => window.getPageLabels())));
+
+// 標記要能來回：重開編輯器時帶得出來（使用者才看得到目前設定）
+await page13.evaluate(() => { openTocEditor(); });
+await page13.waitForSelector('#tocModal[open]', { timeout: 5000 });
+const reopened = (await page13.inputValue('#tocTextarea')).split('\n');
+check(reopened[2].startsWith('[roman-lower]') && !/\[roman-lower\]/.test(reopened[0]),
+    '重開編輯器會帶出既有的編號標記（且不佔行數、不污染標題）',
+    JSON.stringify(reopened));
+await page13.click('button:has-text("取消")');
+await page13.waitForTimeout(200);
+
+// 產出的 PDF：頁碼用分節編號（附錄應印 i、ii）
+await page13.evaluate(() => {
+    document.querySelectorAll('dialog[open]').forEach(d => { if (d.id !== 'previewModal') d.close(); });
+    const mk = document.getElementById('addMarksCheckbox');
+    mk.checked = true; mk.dispatchEvent(new Event('change', { bubbles: true }));
+    document.getElementById('headerFormat').value = '';
+    document.getElementById('footerFormat').value = '';
+    document.getElementById('pageNumberFormat').value = '{n}';
+    document.getElementById('pageNumberPosition').value = 'bottom-center';
+});
+const [download13] = await Promise.all([
+    page13.waitForEvent('download', { timeout: 60000 }).catch(() => null),
+    page13.click('#generateBtn'),
+]);
+await page13.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+check(/預覽生成成功/.test(await page13.textContent('#progress')), '分節編號的生成成功', (await page13.textContent('#progress')).trim());
+const numB64 = await page13.evaluate(async () => {
+    const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return btoa(s);
+});
+const numTexts = await readPageTexts(page13, numB64);
+const numFlat = numTexts.map(items => items.join(' '));
+// 目錄頁在最前面；取最後 4 頁為內容頁
+const contentLabels = numFlat.slice(-4).map(t => (t.match(/\b(?:[0-9]+|i{1,3}|iv)\b/g) || []).join(''));
+check(numFlat.slice(-4).some(t => /\bi\b/.test(t)) && numFlat.slice(-4).some(t => /\bii\b/.test(t)),
+    '附錄的頁碼在 PDF 上是 i、ii', JSON.stringify(numFlat.slice(-4)));
+check(numFlat.slice(-4).filter(t => /\b1\b|\b2\b/.test(t)).length === 2,
+    '正文的頁碼是 1、2', JSON.stringify(numFlat.slice(-4)));
+check(errors13.length === 0, '分節編號流程沒有 pageerror／console error', errors13.slice(0, 2).join(' | '));
 
 await browser.close();
 server.close();
