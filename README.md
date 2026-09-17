@@ -108,6 +108,19 @@ npm test        # = node verify.mjs，需要 playwright
 > 註：Node 20 起以 ESM 匯入 repo 內附的 UMD bundle（pdf-lib／fontkit）不會拿到匯出，
 > 因此 `verify.mjs` 自己用 `vm` 把 bundle 當瀏覽器 `<script>` 載入（詳見檔案內註解）。
 
+## 🧪 線上煙霧測試
+
+`verify.mjs` 跑的是本機檔案；`smoke-live.mjs` 則是對**正式站**（GitHub Pages）跑一輪真實流程，
+用來確認部署後的版本在瀏覽器環境裡真的能用：
+
+```bash
+PW_MODULE=/path/to/playwright/index.js node smoke-live.mjs
+```
+
+涵蓋：載入＋縮圖（無殘留 canvas）、頁首／頁碼、浮水印、裁白邊＋統一尺寸、2-up 拼版、
+依小節拆檔（ZIP 下載並驗證內容）、復原／重做、工作階段還原，以及全程不得有
+pageerror／console error／HTTP 4xx。
+
 ## 🚀 快速開始
 
 ### 前置需求

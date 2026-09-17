@@ -336,6 +336,32 @@ window.onload = function() {
         });
     }
 
+    // 輸出設定卡可以整組收起來：720px 高度下七張卡會把上傳區擠出畫面，
+    // 收起來後上傳／檔案清單／生成按鈕都還看得到。
+    const settingsToggle = document.getElementById('settingsToggle');
+    const sidebarActions = document.querySelector('.sidebar-actions');
+    if (settingsToggle) {
+        settingsToggle.addEventListener('click', () => {
+            const collapsed = document.body.classList.toggle('settings-collapsed');
+            settingsToggle.setAttribute('aria-expanded', String(!collapsed));
+            settingsToggle.querySelector('.settings-toggle-text').textContent = collapsed ? '展開輸出設定' : '收合輸出設定';
+            updateActionsOverflow();
+        });
+    }
+    // 動作區自己捲動時（內容比視窗高）補一條上緣線，讓「還沒到底」看得出來
+    function updateActionsOverflow() {
+        if (!sidebarActions) return;
+        const overflow = sidebarActions.scrollHeight > sidebarActions.clientHeight + 2;
+        sidebarActions.classList.toggle('is-overflowing', overflow);
+    }
+    if (sidebarActions) {
+        sidebarActions.addEventListener('scroll', () => {
+            sidebarActions.classList.toggle('at-top', sidebarActions.scrollTop <= 1);
+        });
+        window.addEventListener('resize', updateActionsOverflow);
+        setTimeout(updateActionsOverflow, 0);
+    }
+
     // 拆檔設定面板切換
     const enableSplitCheckbox = document.getElementById('enableSplitCheckbox');
     if (enableSplitCheckbox && splitSettingsPanel) {

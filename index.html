@@ -125,8 +125,15 @@
             💡 提示：生成的 PDF 會保留原始文字，可以正常搜尋和複製。目錄使用思源黑體以支援中文顯示。
         </div>
 
+        <!-- 輸出設定：可整組收合（螢幕較矮時才看得到上傳區與生成按鈕） -->
+        <button type="button" class="settings-toggle" id="settingsToggle" aria-expanded="true" aria-controls="sidebarActions">
+            <span class="settings-toggle-icon" aria-hidden="true">⚙️</span>
+            <span class="settings-toggle-text">收合輸出設定</span>
+            <span class="settings-toggle-chevron" aria-hidden="true">▾</span>
+        </button>
+
         <!-- 動作區固定於側邊欄底部，捲動時永遠可見 -->
-        <div class="sidebar-actions">
+        <div class="sidebar-actions" id="sidebarActions">
             <div class="option-card">
                 <label>
                     <input type="checkbox" id="addMarksCheckbox">
@@ -473,7 +480,7 @@
                 </div>
             </div>
 
-            <div class="option-card">
+            <div class="option-card keep-visible">
                 <label>
                     <input type="checkbox" id="addTocCheckbox">
                     <span>📑 新增目錄頁</span>

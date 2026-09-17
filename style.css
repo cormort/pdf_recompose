@@ -647,7 +647,46 @@ input[type="file"] { display: none; }
     flex-direction: column;
     gap: 10px;
     z-index: 5;
+    /* 自己捲動，而不是把上傳區與檔案清單推出畫面。
+       扣掉標題、上傳區、檔案清單與提示的大約高度。 */
+    max-height: calc(100vh - 260px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
 }
+.sidebar-actions.is-overflowing:not(.at-top) {
+    /* 內容被截斷時在上緣補一條髮絲線，提示「上面還有」 */
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14);
+}
+.sidebar-actions::-webkit-scrollbar { width: 8px; }
+.sidebar-actions::-webkit-scrollbar-thumb {
+    background: var(--dark-3);
+    border-radius: 4px;
+}
+.sidebar-actions::-webkit-scrollbar-track { background: transparent; }
+
+/* 輸出設定收合鈕 */
+.settings-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--dark-3);
+    border-radius: var(--radius-sm);
+    background: var(--dark-2);
+    color: var(--dark-fg);
+    font-size: 12px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background .2s var(--ease);
+}
+.settings-toggle:hover { background: var(--dark-3); }
+.settings-toggle-text { flex: 1; text-align: left; }
+.settings-toggle-chevron { transition: transform .2s var(--ease); }
+body.settings-collapsed .settings-toggle-chevron { transform: rotate(-90deg); }
+body.settings-collapsed .sidebar-actions { max-height: none; overflow: visible; }
+body.settings-collapsed .sidebar-actions .option-card:not(.keep-visible) { display: none; }
 
 /* HeroUI Card（暗色） */
 .option-card {
