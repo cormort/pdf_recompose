@@ -281,7 +281,7 @@ await page.evaluate(() => {
     URL.createObjectURL = (b) => { window.__blob.created++; return c(b); };
     URL.revokeObjectURL = (u) => { window.__blob.revoked++; return r(u); };
     const t = document.getElementById('addTocCheckbox'); t.checked = true; t.dispatchEvent(new Event('change', { bubbles: true }));
-    document.getElementById('addPageNumbersCheckbox').checked = true;
+    document.getElementById('addMarksCheckbox').checked = true;
 });
 await page.click('#generateBtn');
 await page.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
@@ -377,7 +377,7 @@ await page2.click('button:has-text("加入右側")');
 await page2.waitForTimeout(400);
 await page2.evaluate(() => {
     const t = document.getElementById('addTocCheckbox'); t.checked = true; t.dispatchEvent(new Event('change', { bubbles: true }));
-    document.getElementById('addPageNumbersCheckbox').checked = true;
+    document.getElementById('addMarksCheckbox').checked = true;
 });
 await page2.click('#generateBtn');
 await page2.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 300000 });
@@ -591,7 +591,7 @@ await page6.waitForTimeout(300);
 await page6.evaluate(() => {
     const toc = document.getElementById('addTocCheckbox'); toc.checked = true; toc.dispatchEvent(new Event('change', { bubbles: true }));
     const bm = document.getElementById('addBookmarksCheckbox'); bm.checked = true;
-    document.getElementById('addPageNumbersCheckbox').checked = true;
+    document.getElementById('addMarksCheckbox').checked = true;
 });
 await page6.click('#generateBtn');
 await page6.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
@@ -915,20 +915,81 @@ const blankCounts = (await readPageTexts(page9, blankB64)).map(items => countWat
 check(blankCounts.every(n => n === 0), '空白浮水印文字不會蓋上去', JSON.stringify(blankCounts));
 check(errors9.length === 0, '浮水印流程沒有 pageerror／console error', errors9.slice(0, 2).join(' | '));
 
+// ── 18b. 頁面標記：頁首／頁尾與頁碼共用面板 ──
+await page9.evaluate(() => document.getElementById('previewModal').close());
+await page9.evaluate(() => {
+    const wm = document.getElementById('addWatermarkCheckbox'); wm.checked = false; wm.dispatchEvent(new Event('change', { bubbles: true }));
+    const mk = document.getElementById('addMarksCheckbox'); mk.checked = true; mk.dispatchEvent(new Event('change', { bubbles: true }));
+});
+await page9.fill('#headerFormat', 'DOC-{n}');
+await page9.selectOption('#headerPosition', 'top-center');
+await page9.fill('#footerFormat', '{date}');
+await page9.selectOption('#footerPosition', 'bottom-left');
+await page9.fill('#pageNumberFormat', 'P{n}');
+await page9.selectOption('#pageNumberPosition', 'bottom-right');
+await page9.click('#generateBtn');
+await page9.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+check(/預覽生成成功/.test(await page9.textContent('#progress')), '頁首／頁尾／頁碼同時輸出成功');
+
+const mkB64 = await page9.evaluate(async () => {
+    const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return btoa(s);
+});
+const mkTocPages = (await PDFDocument.load(Buffer.from(mkB64, 'base64'))).getPageCount() - 3;
+const mkMarks = await page9.evaluate(async (b64) => {
+    const bin = atob(b64); const data = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+    const doc = await window.pdfjsLib.getDocument({ data }).promise;
+    const out = [];
+    for (let i = 1; i <= doc.numPages; i++) {
+        const page = await doc.getPage(i);
+        const vp = page.getViewport({ scale: 1 });
+        const tc = await page.getTextContent();
+        const find = (re) => {
+            const hit = tc.items.find(it => re.test(it.str.trim()));
+            return hit ? { s: hit.str.trim(), x: hit.transform[4], y: hit.transform[5], w: vp.width, h: vp.height } : null;
+        };
+        out.push({ header: find(/^DOC-\d+$/), footer: find(/^\d{4}-\d{2}-\d{2}$/), pn: find(/^P\d+$/) });
+        if (i === 1) await doc.getPage(1);
+    }
+    await doc.destroy();
+    return out;
+}, mkB64);
+const mkContent = mkMarks.slice(mkTocPages);
+check(mkContent.every(m => m.header && /^DOC-\d+$/.test(m.header.s)), '每一頁都有頁首標記',
+    JSON.stringify(mkContent.map(m => m.header && m.header.s)));
+check(mkContent.every(m => m.footer && /^\d{4}-\d{2}-\d{2}$/.test(m.footer.s)), '每一頁都有頁尾標記',
+    JSON.stringify(mkContent.map(m => m.footer && m.footer.s)));
+check(mkContent.every(m => m.header.y > m.header.h * 0.85), '頁首在頁面上方', JSON.stringify(mkContent.map(m => m.header && Math.round(m.header.y))));
+check(mkContent.every(m => m.footer.y < m.footer.h * 0.15 && m.footer.x < m.footer.w * 0.35),
+    '頁尾在左下（位置各自獨立）', JSON.stringify(mkContent.map(m => m.footer && [Math.round(m.footer.x), Math.round(m.footer.y)])));
+check(mkContent.every(m => m.pn && m.pn.x > m.pn.w * 0.6), '頁碼仍在右下', JSON.stringify(mkContent.map(m => m.pn && Math.round(m.pn.x))));
+check(errors9.length === 0, '頁面標記流程沒有 pageerror', errors9.slice(0, 2).join(' | '));
+
 // ── 19. 頁碼格式 ──
-// 沿用 page9（3 頁內容已就緒）。先關掉浮水印，避免文字互相干擾判讀。
+// 沿用 page9（3 頁內容已就緒）。這一段要單獨驗證「只有頁碼」的輸出，
+// 所以先把浮水印與頁首／頁尾清乾淨（前一段驗過它們，狀態會留著）。
 await page9.evaluate(() => {
     document.getElementById('previewModal').close();
-    const wm = document.getElementById('addWatermarkCheckbox'); wm.checked = false; wm.dispatchEvent(new Event('change', { bubbles: true }));
+    const wm = document.getElementById('addWatermarkCheckbox');
+    wm.checked = false; wm.dispatchEvent(new Event('change', { bubbles: true }));
+    document.getElementById('headerFormat').value = '';
+    document.getElementById('footerFormat').value = '';
+    const cb = document.getElementById('addMarksCheckbox');
+    cb.checked = false; cb.dispatchEvent(new Event('change', { bubbles: true }));
 });
-check(await page9.evaluate(() => document.getElementById('pageNumberSettingsPanel').style.display === 'none'),
-    '未勾選頁碼時不顯示頁碼設定面板');
+check(await page9.evaluate(() => document.getElementById('marksSettingsPanel').style.display === 'none'),
+    '未勾選頁面標記時不顯示設定面板');
 await page9.evaluate(() => {
-    const cb = document.getElementById('addPageNumbersCheckbox');
+    const cb = document.getElementById('addMarksCheckbox');
     cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true }));
 });
-check(await page9.evaluate(() => document.getElementById('pageNumberSettingsPanel').style.display !== 'none'),
-    '勾選頁碼後展開設定面板');
+check(await page9.evaluate(() => document.getElementById('marksSettingsPanel').style.display !== 'none'),
+    '勾選頁面標記後展開設定面板');
 
 // 預設格式：第 {n} 頁 / 共 {total} 頁。3 頁內容＋1 頁目錄 → total = 4，內容頁碼 2,3,4
 await page9.evaluate(() => {
@@ -968,13 +1029,13 @@ check(pnBodyAndLabel.every(Boolean),
 
 // 快速套用鈕
 await page9.evaluate(() => document.getElementById('previewModal').close());
-await page9.click('#pageNumberSettingsPanel button:has-text("N/M")');
+await page9.click('#marksSettingsPanel button:has-text("N/M")');
 check(await page9.inputValue('#pageNumberFormat') === '{n} / {total}', '快速套用「N/M」會改寫格式欄位');
-await page9.click('#pageNumberSettingsPanel button:has-text("純數字")');
+await page9.click('#marksSettingsPanel button:has-text("純數字")');
 check(await page9.inputValue('#pageNumberFormat') === '{n}', '快速套用「純數字」會改寫格式欄位');
-await page9.click('#pageNumberSettingsPanel button:has-text("第N頁")');
+await page9.click('#marksSettingsPanel button:has-text("第N頁")');
 check(await page9.inputValue('#pageNumberFormat') === '第 {n} 頁 / 共 {total} 頁', '快速套用「第N頁」會改寫格式欄位');
-await page9.click('#pageNumberSettingsPanel button:has-text("純數字")');
+await page9.click('#marksSettingsPanel button:has-text("純數字")');
 
 // 純數字格式：內容頁只抽得到 n（＝原本的預設行為不能退化）
 await page9.click('#generateBtn');

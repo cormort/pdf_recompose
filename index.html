@@ -129,24 +129,17 @@
         <div class="sidebar-actions">
             <div class="option-card">
                 <label>
-                    <input type="checkbox" id="addPageNumbersCheckbox">
-                    <span>#️⃣ 新增頁碼</span>
+                    <input type="checkbox" id="addMarksCheckbox">
+                    <span>#️⃣ 頁面標記（頁首／頁尾／頁碼）</span>
                 </label>
-                <p class="option-hint">可用變數：<code>{n}</code> 目前頁碼、<code>{total}</code> 總頁數、<code>{name}</code> 檔名、<code>{date}</code> 日期。</p>
+                <p class="option-hint">可用變數：<code>{n}</code> 頁碼、<code>{total}</code> 總頁數（含目錄頁）、<code>{name}</code> 檔名、<code>{date}</code> 日期。</p>
 
-                <div id="pageNumberSettingsPanel" class="toc-settings" style="display: none;">
-                    <div class="toc-settings-title">⚙️ 頁碼設定</div>
+                <div id="marksSettingsPanel" class="toc-settings" style="display: none;">
+                    <div class="toc-settings-title">⚙️ 標記設定</div>
 
                     <div class="toc-settings-grid">
                         <div class="toc-field toc-field-full">
-                            <label>格式</label>
-                            <div class="toc-input-row">
-                                <input type="text" id="pageNumberFormat" class="toc-input toc-input-wide" value="第 {n} 頁 / 共 {total} 頁" maxlength="60">
-                            </div>
-                        </div>
-
-                        <div class="toc-field toc-field-full">
-                            <label>快速套用</label>
+                            <label>快速套用（頁碼）</label>
                             <div class="toc-input-row">
                                 <button type="button" class="toc-reset-btn toc-preset-btn" onclick="applyPageNumberPreset('plain')" title="只印頁碼數字">純數字</button>
                                 <button type="button" class="toc-reset-btn toc-preset-btn" onclick="applyPageNumberPreset('chinese')" title="第 {n} 頁 / 共 {total} 頁">第N頁</button>
@@ -155,8 +148,51 @@
                             </div>
                         </div>
 
+                        <div class="toc-field toc-field-full">
+                            <label>頁首</label>
+                            <div class="toc-input-row">
+                                <input type="text" id="headerFormat" class="toc-input toc-input-wide" placeholder="留空＝不印（例：{name}）" maxlength="60">
+                            </div>
+                        </div>
+
                         <div class="toc-field">
-                            <label>位置</label>
+                            <label>頁首位置</label>
+                            <div class="toc-input-row">
+                                <select id="headerPosition" class="toc-input">
+                                    <option value="top-center">正上</option>
+                                    <option value="top-left">左上</option>
+                                    <option value="top-right">右上</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="toc-field toc-field-full">
+                            <label>頁尾</label>
+                            <div class="toc-input-row">
+                                <input type="text" id="footerFormat" class="toc-input toc-input-wide" placeholder="留空＝不印（例：{date}）" maxlength="60">
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>頁尾位置</label>
+                            <div class="toc-input-row">
+                                <select id="footerPosition" class="toc-input">
+                                    <option value="bottom-center">正下</option>
+                                    <option value="bottom-left">左下</option>
+                                    <option value="bottom-right">右下</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="toc-field toc-field-full">
+                            <label>頁碼</label>
+                            <div class="toc-input-row">
+                                <input type="text" id="pageNumberFormat" class="toc-input toc-input-wide" value="第 {n} 頁 / 共 {total} 頁" maxlength="60">
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>頁碼位置</label>
                             <div class="toc-input-row">
                                 <select id="pageNumberPosition" class="toc-input">
                                     <option value="bottom-right">右下</option>
@@ -170,7 +206,7 @@
                         </div>
 
                         <div class="toc-field">
-                            <label>邊距</label>
+                            <label>邊距（三者共用）</label>
                             <div class="toc-input-row">
                                 <input type="number" id="pageNumberMargin" class="toc-input" min="8" max="120" value="30">
                                 <span class="toc-unit">pt</span>
@@ -178,7 +214,7 @@
                         </div>
 
                         <div class="toc-field">
-                            <label>字級</label>
+                            <label>字級（三者共用）</label>
                             <div class="toc-input-row">
                                 <input type="number" id="pageNumberSize" class="toc-input" min="6" max="36" value="10">
                                 <span class="toc-unit">pt</span>

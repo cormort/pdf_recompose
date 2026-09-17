@@ -116,6 +116,7 @@ window.onload = function() {
     const notification = document.getElementById('notification');
     const addTocCheckbox = document.getElementById('addTocCheckbox');
     const tocSettingsPanel = document.getElementById('tocSettingsPanel');
+    const marksSettingsPanel = document.getElementById('marksSettingsPanel');
     const watermarkSettingsPanel = document.getElementById('watermarkSettingsPanel');
     const previewModal = document.getElementById('previewModal');
 
@@ -283,20 +284,19 @@ window.onload = function() {
         tocSettingsPanel.style.display = this.checked ? 'block' : 'none';
     });
 
-    // 浮水印設定面板切換
-    const addWatermarkCheckbox = document.getElementById('addWatermarkCheckbox');
-    if (addWatermarkCheckbox) {
-        addWatermarkCheckbox.addEventListener('change', function() {
-            watermarkSettingsPanel.style.display = this.checked ? 'block' : 'none';
+    // 頁面標記面板切換（頁首／頁尾／頁碼共用同一個面板）
+    const addMarksCheckbox = document.getElementById('addMarksCheckbox');
+    if (addMarksCheckbox && marksSettingsPanel) {
+        addMarksCheckbox.addEventListener('change', function() {
+            marksSettingsPanel.style.display = this.checked ? 'block' : 'none';
         });
     }
 
-    // 頁碼設定面板切換
-    const pageNumberSettingsPanel = document.getElementById('pageNumberSettingsPanel');
-    const addPageNumbersCheckbox = document.getElementById('addPageNumbersCheckbox');
-    if (addPageNumbersCheckbox && pageNumberSettingsPanel) {
-        addPageNumbersCheckbox.addEventListener('change', function() {
-            pageNumberSettingsPanel.style.display = this.checked ? 'block' : 'none';
+    // 浮水印設定面板切換
+    const addWatermarkCheckbox = document.getElementById('addWatermarkCheckbox');
+    if (addWatermarkCheckbox && watermarkSettingsPanel) {
+        addWatermarkCheckbox.addEventListener('change', function() {
+            watermarkSettingsPanel.style.display = this.checked ? 'block' : 'none';
         });
     }
 
@@ -686,23 +686,46 @@ window.onload = function() {
     }
 
     function resetPageNumberSettings() {
+        document.getElementById('headerFormat').value = '';
+        document.getElementById('headerPosition').value = 'top-center';
+        document.getElementById('footerFormat').value = '';
+        document.getElementById('footerPosition').value = 'bottom-center';
         document.getElementById('pageNumberFormat').value = PAGE_NUMBER_DEFAULTS.format;
         document.getElementById('pageNumberPosition').value = PAGE_NUMBER_DEFAULTS.position;
         document.getElementById('pageNumberMargin').value = PAGE_NUMBER_DEFAULTS.margin;
         document.getElementById('pageNumberSize').value = PAGE_NUMBER_DEFAULTS.size;
-        showNotification('✅ 頁碼設定已重設', 'success');
+        showNotification('✅ 標記設定已重設', 'success');
     }
 
-    function readPageNumberConfig() {
-        const preset = PAGE_NUMBER_PRESETS.plain;
-        const raw = document.getElementById('pageNumberFormat').value;
-        return {
-            // 格式空白時退回「純數字」，總比什麼都不印好
-            format: (typeof raw === 'string' && raw.trim()) ? raw : preset,
-            position: document.getElementById('pageNumberPosition').value || PAGE_NUMBER_DEFAULTS.position,
-            margin: clampNumber(document.getElementById('pageNumberMargin').value, 8, 120, PAGE_NUMBER_DEFAULTS.margin),
-            size: clampNumber(document.getElementById('pageNumberSize').value, 6, 36, PAGE_NUMBER_DEFAULTS.size),
-        };
+    // 三種標記的定義：面板欄位 id、預設位置。三者共用邊距與字級。
+    const MARK_DEFS = [
+        { key: 'header', formatId: 'headerFormat', positionId: 'headerPosition', defaultPosition: 'top-center' },
+        { key: 'footer', formatId: 'footerFormat', positionId: 'footerPosition', defaultPosition: 'bottom-center' },
+        { key: 'pageNumber', formatId: 'pageNumberFormat', positionId: 'pageNumberPosition', defaultPosition: 'bottom-right' },
+    ];
+
+    // 讀出要畫的標記清單。格式留空＝不印；只有頁碼留空時退回「純數字」，
+    // 因為使用者勾了「頁面標記」通常就是要頁碼。
+    function readMarksConfig() {
+        const margin = clampNumber(document.getElementById('pageNumberMargin').value, 8, 120, PAGE_NUMBER_DEFAULTS.margin);
+        const size = clampNumber(document.getElementById('pageNumberSize').value, 6, 36, PAGE_NUMBER_DEFAULTS.size);
+        const marks = [];
+        for (const def of MARK_DEFS) {
+            const raw = document.getElementById(def.formatId).value;
+            let format = (typeof raw === 'string') ? raw.trim() : '';
+            if (!format) {
+                if (def.key !== 'pageNumber') continue; // 頁首／頁尾留空＝不印
+                format = PAGE_NUMBER_PRESETS.plain;
+            }
+            marks.push({
+                key: def.key,
+                format,
+                position: document.getElementById(def.positionId).value || def.defaultPosition,
+                margin,
+                size,
+            });
+        }
+        return marks;
     }
 
     // {n} 目前頁碼、{total} 總頁數、{name} 來源檔名、{date} 日期。
@@ -1065,7 +1088,11 @@ window.onload = function() {
             tocSettings: {
                 addToc: addTocCheckbox.checked,
                 addBookmarks: !!(document.getElementById('addBookmarksCheckbox') || {}).checked,
-                addPageNumbers: document.getElementById('addPageNumbersCheckbox').checked,
+                addMarks: !!(document.getElementById('addMarksCheckbox') || {}).checked,
+                headerFormat: document.getElementById('headerFormat').value,
+                headerPosition: document.getElementById('headerPosition').value,
+                footerFormat: document.getElementById('footerFormat').value,
+                footerPosition: document.getElementById('footerPosition').value,
                 pageNumberFormat: document.getElementById('pageNumberFormat').value,
                 pageNumberPosition: document.getElementById('pageNumberPosition').value,
                 pageNumberMargin: document.getElementById('pageNumberMargin').value,
@@ -1169,8 +1196,13 @@ window.onload = function() {
                 tocSettingsPanel.style.display = addTocCheckbox.checked ? 'block' : 'none';
                 const bmBox = document.getElementById('addBookmarksCheckbox');
                 if (bmBox) bmBox.checked = !!payload.tocSettings.addBookmarks;
-                if (pageNumberSettingsPanel) {
-                    pageNumberSettingsPanel.style.display = document.getElementById('addPageNumbersCheckbox').checked ? 'block' : 'none';
+                const marksBox = document.getElementById('addMarksCheckbox');
+                if (marksBox) {
+                    // 舊版工作階段存的是 addPageNumbers，沒有 addMarks 時沿用它的值
+                    const legacy = payload.tocSettings.addPageNumbers;
+                    marksBox.checked = payload.tocSettings.addMarks !== undefined
+                        ? !!payload.tocSettings.addMarks : !!legacy;
+                    marksSettingsPanel.style.display = marksBox.checked ? 'block' : 'none';
                 }
                 const wmBox = document.getElementById('addWatermarkCheckbox');
                 if (wmBox) {
@@ -1182,6 +1214,10 @@ window.onload = function() {
                     const el = document.getElementById(id);
                     if (el) el.value = value;
                 };
+                setVal('headerFormat', payload.tocSettings.headerFormat);
+                setVal('headerPosition', payload.tocSettings.headerPosition);
+                setVal('footerFormat', payload.tocSettings.footerFormat);
+                setVal('footerPosition', payload.tocSettings.footerPosition);
                 setVal('pageNumberFormat', payload.tocSettings.pageNumberFormat);
                 setVal('pageNumberPosition', payload.tocSettings.pageNumberPosition);
                 setVal('pageNumberMargin', payload.tocSettings.pageNumberMargin);
@@ -1193,7 +1229,6 @@ window.onload = function() {
                 setVal('watermarkOpacity', payload.tocSettings.watermarkOpacity);
                 setVal('watermarkAngle', payload.tocSettings.watermarkAngle);
                 setVal('watermarkRange', payload.tocSettings.watermarkRange);
-                document.getElementById('addPageNumbersCheckbox').checked = !!payload.tocSettings.addPageNumbers;
             }
             setViewMode(viewMode);
             setThumbnailSize(thumbnailSize);
@@ -2449,7 +2484,7 @@ window.onload = function() {
             const cjkFont = cjkFontAvailable ? customFont : asciiFont;
 
             const addToc = addTocCheckbox.checked;
-            const addPageNumbers = document.getElementById('addPageNumbersCheckbox').checked;
+            const addMarks = !!(document.getElementById('addMarksCheckbox') || {}).checked;
             const addBookmarks = !!(document.getElementById('addBookmarksCheckbox') || {}).checked;
 
             // --- 合併內容頁 ---
@@ -2672,41 +2707,47 @@ window.onload = function() {
                 }
             }
 
-            // --- 頁碼（畫在內容頁右下角；編號要加上目錄頁數，所以等目錄排版完成才畫）---
-            // 頁碼是純 ASCII 數字，用 ASCII 字型與目錄同一條路徑（目錄的數字也是走 asciiFont）。
-            // 實測兩種寫法抽出的文字都正確，但統一路徑可避免只有某些檢視器／字型版本才踩到
-            // CJK 子集化的 glyph 對映問題。
-            if (addPageNumbers) {
-                const pnConfig = readPageNumberConfig();
-                const totalPages = contentEntries.length + tocPageCount;
-                const today = new Date();
-                const pad2 = (n) => String(n).padStart(2, '0');
-                const dateText = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-${pad2(today.getDate())}`;
-                contentEntries.forEach(({ page, item }, index) => {
-                    const { width, height } = page.getSize();
-                    if (!(width > 0 && height > 0)) return;
-                    const label = formatPageNumber(pnConfig.format, {
-                        n: index + 1 + tocPageCount,
-                        // {total} 含目錄頁：使用者看到的實體總頁數
-                        total: totalPages,
-                        name: item.fileName || '',
-                        date: dateText,
+            // --- 頁面標記：頁首／頁尾／頁碼 ---
+            // 三者共用變數替換與位置計算，所以在這裡一次畫完。
+            // 時機：目錄頁數已確定（{total} 要含目錄頁）、且在其他內容之後，標記才不會被蓋掉。
+            if (addMarks) {
+                const marks = readMarksConfig();
+                if (marks.length > 0) {
+                    progress.textContent = '正在加上頁面標記...';
+                    const totalPages = contentEntries.length + tocPageCount;
+                    const today = new Date();
+                    const pad2 = (n) => String(n).padStart(2, '0');
+                    const dateText = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-${pad2(today.getDate())}`;
+                    contentEntries.forEach(({ page, item }, index) => {
+                        const { width, height } = page.getSize();
+                        if (!(width > 0 && height > 0)) return;
+                        for (const mark of marks) {
+                            const label = formatPageNumber(mark.format, {
+                                n: index + 1 + tocPageCount,
+                                // {total} 含目錄頁：使用者看到的實體總頁數
+                                total: totalPages,
+                                name: item.fileName || '',
+                                date: dateText,
+                            });
+                            if (!label) continue;
+                            const textWidth = watermarkTextWidth(label, mark.size, cjkFont, asciiFont);
+                            const { x, y } = pageNumberPositionXY(mark.position, width, height, textWidth, mark.margin);
+                            try {
+                                drawMixedText(page, label, x, y, mark.size, cjkFont, asciiFont, rgb(0, 0, 0),
+                                    { cjkFontAvailable });
+                            } catch (markError) {
+                                console.error(`頁面標記（${mark.key}）繪製失敗：`, markError);
+                            }
+                        }
                     });
-                    const textWidth = watermarkTextWidth(label, pnConfig.size, cjkFont, asciiFont);
-                    const { x, y } = pageNumberPositionXY(pnConfig.position, width, height, textWidth, pnConfig.margin);
-                    try {
-                        drawMixedText(page, label, x, y, pnConfig.size, cjkFont, asciiFont, rgb(0, 0, 0),
-                            { cjkFontAvailable });
-                    } catch (pnError) {
-                        console.error('頁碼繪製失敗：', pnError);
-                    }
-                });
+                }
             }
 
             // --- 浮水印／印章 ---
             // 畫在所有內容與頁碼之後：浮水印要蓋在最上層才不會被後面的繪製蓋掉。
             // 頁碼範圍以「成品內容頁」為準（不含目錄頁），跟使用者在右側看到的順序一致。
             const addWatermark = !!(document.getElementById('addWatermarkCheckbox') || {}).checked;
+
             if (addWatermark && contentEntries.length > 0) {
                 const wmConfig = readWatermarkConfig();
                 if (wmConfig.enabled) {
