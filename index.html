@@ -316,6 +316,56 @@
 
             <div class="option-card">
                 <label>
+                    <input type="checkbox" id="enableLayoutCheckbox">
+                    <span>📐 版面調整（裁白邊／統一尺寸）</span>
+                </label>
+                <p class="option-hint">只改頁面框與尺寸，不動內容 —— 文字、搜尋與書籤連結都不受影響。</p>
+
+                <div id="layoutSettingsPanel" class="toc-settings" style="display: none;">
+                    <div class="toc-settings-title">⚙️ 版面設定</div>
+
+                    <div class="toc-settings-grid">
+                        <div class="toc-field toc-field-full">
+                            <label>裁切方式</label>
+                            <div class="toc-input-row">
+                                <select id="layoutFitSelect" class="toc-input">
+                                    <option value="original">維持原頁面範圍</option>
+                                    <option value="content">裁掉多餘白邊（自動偵測內容）</option>
+                                    <option value="inset">四邊平均內縮</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>留白／內縮</label>
+                            <div class="toc-input-row">
+                                <input type="number" id="layoutMarginInput" class="toc-input" min="0" max="200" value="10">
+                                <span class="toc-unit">pt</span>
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>統一頁面尺寸</label>
+                            <div class="toc-input-row">
+                                <select id="uniformSizeSelect" class="toc-input">
+                                    <option value="original">不統一</option>
+                                    <option value="a4">A4</option>
+                                    <option value="a5">A5</option>
+                                    <option value="b5">B5</option>
+                                    <option value="letter">Letter</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button onclick="resetLayoutSettings()" class="toc-reset-btn">
+                        🔄 重設為預設值
+                    </button>
+                </div>
+            </div>
+
+            <div class="option-card">
+                <label>
                     <input type="checkbox" id="addTocCheckbox">
                     <span>📑 新增目錄頁</span>
                 </label>

@@ -118,6 +118,7 @@ window.onload = function() {
     const tocSettingsPanel = document.getElementById('tocSettingsPanel');
     const marksSettingsPanel = document.getElementById('marksSettingsPanel');
     const watermarkSettingsPanel = document.getElementById('watermarkSettingsPanel');
+    const layoutSettingsPanel = document.getElementById('layoutSettingsPanel');
     const previewModal = document.getElementById('previewModal');
 
     // ------------------------------------------------------
@@ -161,6 +162,7 @@ window.onload = function() {
     window.prefillTocFromSource = prefillTocFromSource;
     window.resetTocSettings = resetTocSettings;
     window.resetWatermarkSettings = resetWatermarkSettings;
+    window.resetLayoutSettings = resetLayoutSettings;
     window.resetPageNumberSettings = resetPageNumberSettings;
     window.applyPageNumberPreset = applyPageNumberPreset;
 
@@ -196,6 +198,8 @@ window.onload = function() {
         redoLabels: redoStack.map(e => e.label),
     });
     window.flushSessionSave = flushSessionSave;
+    // 驗證用：內容邊界（裁白邊的依據）
+    window.getContentBoxes = () => pdfFiles.map(f => (f.pages || []).map(p => p.contentBox));
     window.clearSession = clearSession;
     // 啟動時的「是否還原上次工作階段」檢查；呼叫端可以 await 它，
     // 避免還原對話框還沒問完就跟其他操作打架。
@@ -289,6 +293,14 @@ window.onload = function() {
     if (addMarksCheckbox && marksSettingsPanel) {
         addMarksCheckbox.addEventListener('change', function() {
             marksSettingsPanel.style.display = this.checked ? 'block' : 'none';
+        });
+    }
+
+    // 版面設定面板切換
+    const enableLayoutCheckbox = document.getElementById('enableLayoutCheckbox');
+    if (enableLayoutCheckbox && layoutSettingsPanel) {
+        enableLayoutCheckbox.addEventListener('change', function() {
+            layoutSettingsPanel.style.display = this.checked ? 'block' : 'none';
         });
     }
 
@@ -501,6 +513,33 @@ window.onload = function() {
         return typeof url === 'string' && /^data:image\//.test(url);
     }
 
+    // 掃描畫布找出「非白」內容的邊界（像素座標）。用來支援「裁掉多餘白邊」：
+    // 掃描件與公文常有大量白邊，逐頁量測比固定內縮準確得多。
+    // 回傳的是「渲染後（含 /Rotate）」的座標；換算回頁面座標由呼叫端處理。
+    function computeContentBBox(canvas, threshold = 245) {
+        const w = canvas.width, h = canvas.height;
+        if (w === 0 || h === 0) return null;
+        let data;
+        try { data = canvas.getContext('2d').getImageData(0, 0, w, h).data; } catch (e) { return null; }
+        let minX = w, minY = h, maxX = -1, maxY = -1;
+        for (let y = 0; y < h; y++) {
+            const rowStart = y * w * 4;
+            for (let x = 0; x < w; x++) {
+                const o = rowStart + x * 4;
+                const r = data[o], g = data[o + 1], b = data[o + 2], alpha = data[o + 3];
+                // 透明算空白；只比亮度，避免彩色內容被判成空白
+                if (alpha > 8 && (r < threshold || g < threshold || b < threshold)) {
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
+        if (maxX < 0 || maxY < 0) return null; // 整頁空白
+        return { minX, minY, maxX, maxY, width: w, height: h };
+    }
+
     function toThumbDataUrl(canvas) {
         try {
             const webp = canvas.toDataURL('image/webp', 0.6);
@@ -571,6 +610,15 @@ window.onload = function() {
                             // A4 在 scale 0.5 是 298×421，一張約 0.5MB，200 頁就是 100MB（離屏）＋
                             // 100MB（DOM）＋右側再一份。實測 200 頁文件光 canvas 點陣圖就約 250MB，
                             // 500 頁的公文會直接把瀏覽器拖垮。改成 data URL 後同樣 200 頁只佔幾 MB。
+                            // 量內容邊界要在縮圖編碼之前（編碼後就讀不到像素了）。
+                            // viewport 用 scale 1 換算，才能拿回 pt 單位。
+                            const viewAt1 = page.getViewport({ scale: 1 });
+                            const rawBBox = computeContentBBox(canvas);
+                            const contentBox = rawBBox ? {
+                                minX: rawBBox.minX * 2, minY: rawBBox.minY * 2, // 畫布是 scale 0.5
+                                maxX: (rawBBox.maxX + 1) * 2, maxY: (rawBBox.maxY + 1) * 2,
+                                viewWidth: viewAt1.width, viewHeight: viewAt1.height,
+                            } : null;
                             const thumb = toThumbDataUrl(canvas);
                             canvas.width = 0;
                             canvas.height = 0;
@@ -579,7 +627,9 @@ window.onload = function() {
                                 thumb: thumb, 
                                 firstLine: info.title,
                                 isChecked: false, 
-                                sourceRotation: 0 
+                                sourceRotation: 0,
+                                // 內容邊界與原始尺寸，供「裁白邊」與「統一尺寸」使用
+                                contentBox: contentBox,
                             };
                         } catch (pageErr) {
                             console.error(`處理 "${file.name}" 第 ${i} 頁失敗:`, pageErr);
@@ -748,6 +798,125 @@ window.onload = function() {
         else if (horizontal === 'left') x = margin;
         const y = vertical === 'top' ? pageHeight - margin : margin;
         return { x: Math.max(0, x), y: Math.max(0, y) };
+    }
+
+    // ------------------------------------------------------
+    // 版面：裁掉白邊 / 內縮 / 統一頁面尺寸
+    // ------------------------------------------------------
+
+    const UNIFORM_SIZES = {
+        a4: [595.28, 841.89],
+        a5: [419.53, 595.28],
+        b5: [498.9, 708.66],
+        letter: [612, 792],
+    };
+
+    // 把「渲染後（含 /Rotate）的內容邊界」換算成未旋轉頁面座標。
+    // 邊界是在渲染後的視圖空間量的，而 MediaBox/CropBox 用的是頁面自己的座標系，
+    // 所以要先反轉 /Rotate 的映射，否則有旋轉的頁面會裁錯位置。
+    function viewBoxToPageBox(box, rotate, pageWidth, pageHeight) {
+        const angle = ((rotate % 360) + 360) % 360;
+        const vw = box.viewWidth, vh = box.viewHeight;
+        const x0 = box.minX, y0 = box.minY, x1 = box.maxX, y1 = box.maxY;
+        switch (angle) {
+            case 90:
+                // 視圖為 (x,y) 時，對應未旋轉頁面的 (y, vw-x)
+                return { left: y0, right: y1, bottom: vw - x1, top: vw - x0 };
+            case 180:
+                return { left: vw - x1, right: vw - x0, bottom: y0, top: y1 };
+            case 270:
+                return { left: vh - y1, right: vh - y0, bottom: x0, top: x1 };
+            default:
+                // 未旋轉：視圖與頁面同寬高，y 要翻轉（canvas 上方原點、頁面下方原點）
+                return { left: x0, right: x1, bottom: vh - y1, top: vh - y0 };
+        }
+    }
+
+    function resetLayoutSettings() {
+        document.getElementById('layoutFitSelect').value = 'original';
+        document.getElementById('layoutMarginInput').value = 10;
+        document.getElementById('uniformSizeSelect').value = 'original';
+        showNotification('✅ 版面設定已重設', 'success');
+    }
+
+    function readLayoutConfig() {
+        // 沒勾「版面調整」就完全不動頁面框與尺寸
+        const enabled = !!(document.getElementById('enableLayoutCheckbox') || {}).checked;
+        if (!enabled) return { fit: 'original', margin: 0, targetSize: null };
+        const fit = document.getElementById('layoutFitSelect').value || 'original';
+        const uniform = document.getElementById('uniformSizeSelect').value || 'original';
+        return {
+            fit,
+            margin: clampNumber(document.getElementById('layoutMarginInput').value, 0, 200, 10),
+            // 'original' 以外都是統一尺寸
+            targetSize: uniform === 'original' ? null : (UNIFORM_SIZES[uniform] || null),
+        };
+    }
+
+    // 依設定把 MediaBox/CropBox 縮到要保留的範圍。
+    // 這只改「頁面框」，不動內容，所以文字、搜尋、書籤連結全部不受影響。
+    function applyCropBox(page, item, config) {
+        const { width, height } = page.getSize();
+        if (!(width > 0 && height > 0)) return;
+
+        let box = null;
+        if (config.fit === 'content') {
+            const cb = item.contentBox;
+            const rotate = page.getRotation().angle;
+            // 邊界是在「加入右側當下」量的；使用者之後若又旋轉這頁，兩者會不一致，
+            // 這種情況直接跳過，避免裁到不該裁的位置。
+            const addedRotation = item.rotation || 0;
+            if (cb && ((rotate - addedRotation) % 360 + 360) % 360 === 0) {
+                box = viewBoxToPageBox(cb, rotate, width, height);
+            }
+        } else if (config.fit === 'inset') {
+            const m = config.margin;
+            box = { left: m, bottom: m, right: width - m, top: height - m };
+        }
+        if (!box) return;
+
+        const left = Math.max(0, Math.min(box.left - config.margin, width - 1));
+        const right = Math.max(left + 1, Math.min(box.right + config.margin, width));
+        const bottom = Math.max(0, Math.min(box.bottom - config.margin, height - 1));
+        const top = Math.max(bottom + 1, Math.min(box.top + config.margin, height));
+        try {
+            page.setMediaBox(left, bottom, right - left, top - bottom);
+            page.setCropBox(left, bottom, right - left, top - bottom);
+        } catch (cropError) {
+            console.error('裁切失敗：', cropError);
+        }
+    }
+
+    // 把頁面統一到目標尺寸：改頁面框 + 在內容前面補一個縮放／平移矩陣。
+    //
+    // 為什麼不用 pdf-lib 的 embedPage + drawPage（最直覺的作法）：
+    // 這兩者與 CropBox 會互相干扰。實測結果（同一份內容頁）：
+    //   - embed 後 removePage：XObject 內容被清掉，整頁空白且不報錯。
+    //   - 保留原頁面但同時縮放：文字抽得到、渲染卻沒有墨點（等於空白頁）。
+    //   - 只有「不裁切 + 不縮放」的組合才會正常。
+    // 改用在內容流前面補 `q / cm ... / Q`：文字、向量、圖片全部照舊，
+    // 而且不必重建文件或搬動頁面，原生的頁面結構也保留著。
+    function scalePageToSize(page, targetSize, concatMatrix, pushGs, popGs) {
+        const [tw, th] = targetSize;
+        const box = page.getMediaBox();
+        if (!(box.width > 0 && box.height > 0)) return;
+        const scale = Math.min(tw / box.width, th / box.height);
+        const offsetX = (tw - box.width * scale) / 2;
+        const offsetY = (th - box.height * scale) / 2;
+
+        // 內容座標的原點在 (box.x, box.y)，要先平移回原點再縮放，最後放到新頁的位置
+        const matrix = concatMatrix(scale, 0, 0, scale, offsetX - box.x * scale, offsetY - box.y * scale);
+        try {
+            page.node.wrapContentStreams(
+                page.doc.context.register(page.doc.context.obj(`q\n${matrix.toString()}`)),
+                page.doc.context.register(page.doc.context.obj(`Q`)),
+            );
+        } catch (wrapError) {
+            console.error('插入縮放矩陣失敗：', wrapError);
+            return;
+        }
+        page.setMediaBox(0, 0, tw, th);
+        page.setCropBox(0, 0, tw, th);
     }
 
     // ------------------------------------------------------
@@ -1088,6 +1257,10 @@ window.onload = function() {
             tocSettings: {
                 addToc: addTocCheckbox.checked,
                 addBookmarks: !!(document.getElementById('addBookmarksCheckbox') || {}).checked,
+                enableLayout: !!(document.getElementById('enableLayoutCheckbox') || {}).checked,
+                layoutFit: document.getElementById('layoutFitSelect').value,
+                layoutMargin: document.getElementById('layoutMarginInput').value,
+                uniformSize: document.getElementById('uniformSizeSelect').value,
                 addMarks: !!(document.getElementById('addMarksCheckbox') || {}).checked,
                 headerFormat: document.getElementById('headerFormat').value,
                 headerPosition: document.getElementById('headerPosition').value,
@@ -1214,6 +1387,14 @@ window.onload = function() {
                     const el = document.getElementById(id);
                     if (el) el.value = value;
                 };
+                const layoutBox = document.getElementById('enableLayoutCheckbox');
+                if (layoutBox) {
+                    layoutBox.checked = !!payload.tocSettings.enableLayout;
+                    layoutSettingsPanel.style.display = layoutBox.checked ? 'block' : 'none';
+                }
+                setVal('layoutFitSelect', payload.tocSettings.layoutFit);
+                setVal('layoutMarginInput', payload.tocSettings.layoutMargin);
+                setVal('uniformSizeSelect', payload.tocSettings.uniformSize);
                 setVal('headerFormat', payload.tocSettings.headerFormat);
                 setVal('headerPosition', payload.tocSettings.headerPosition);
                 setVal('footerFormat', payload.tocSettings.footerFormat);
@@ -1689,6 +1870,7 @@ window.onload = function() {
                         // 來源書籤（若該頁有被書籤指到）：預填目錄與寫入成品書籤都用得到
                         sourceTitle: page.sourceTitle || null,
                         level: page.sourceLevel || 0,
+                        contentBox: page.contentBox || null,
                         rotation: page.sourceRotation || 0 
                     });
                     addedCount++;
@@ -2441,7 +2623,7 @@ window.onload = function() {
             progress.classList.remove('success', 'error');
             progress.classList.add('active');
             
-            const newPdf = await PDFDocument.create();
+            let newPdf = await PDFDocument.create();
             let customFont;
             let asciiFont;
             let cjkFontAvailable = true;
@@ -2485,6 +2667,7 @@ window.onload = function() {
 
             const addToc = addTocCheckbox.checked;
             const addMarks = !!(document.getElementById('addMarksCheckbox') || {}).checked;
+            const layoutConfig = readLayoutConfig();
             const addBookmarks = !!(document.getElementById('addBookmarksCheckbox') || {}).checked;
 
             // --- 合併內容頁 ---
@@ -2531,17 +2714,36 @@ window.onload = function() {
                     const [copiedPage] = await newPdf.copyPages(sourcePdf, [item.pageNum - 1]);
                     // copyPages 會保留來源角度，疊加使用者旋轉
                     const existingRotation = copiedPage.getRotation().angle;
-                    const newPage = newPdf.addPage(copiedPage);
+                    let newPage = newPdf.addPage(copiedPage);
 
                     const userRotation = item.rotation || 0;
                     const totalRotation = (existingRotation + userRotation) % 360;
 
                     newPage.setRotation(degrees(totalRotation));
 
+                    // 裁切先做（只改頁面框，不動內容）。統一尺寸在內容合併完、目錄排版前處理，
+                    // 見 scalePageToSize 的說明。
+                    if (layoutConfig.fit !== 'original') applyCropBox(newPage, item, layoutConfig);
+
                     contentEntries.push({ item, page: newPage });
                 } catch (loadError) {
                     console.error(`Error loading/copying page ${item.pageNum} from ${sourceFile.name}:`, loadError);
                     showNotification(`錯誤：無法處理檔案 "${sourceFile.name}" 第 ${item.pageNum} 頁。`, 'error');
+                }
+            }
+
+            // --- 統一頁面尺寸 ---
+            // 放在這裡的原因：裁切已經套用、目錄頁還沒排版。頁面物件不變，
+            // 所以後續的目錄超連結、書籤、頁碼與浮水印都會落在正確的位置。
+            if (layoutConfig.targetSize && contentEntries.length > 0) {
+                progress.textContent = '正在統一頁面尺寸...';
+                for (const { page } of contentEntries) {
+                    try {
+                        scalePageToSize(page, layoutConfig.targetSize, PDFLib.concatTransformationMatrix,
+                            PDFLib.pushGraphicsState, PDFLib.popGraphicsState);
+                    } catch (sizeError) {
+                        console.error('統一頁面尺寸失敗，保留原尺寸：', sizeError);
+                    }
                 }
             }
 

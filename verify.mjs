@@ -149,9 +149,24 @@ async function makeOutlinePdf() {
     return file;
 }
 
+// 內容集中在頁面中央的 A4（四周大片白邊），用來驗證「裁掉白邊」
+async function makeInsetPdf() {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    for (let i = 0; i < 2; i++) {
+        const p = doc.addPage([595, 842]);
+        p.drawText(`Inset ${i + 1}`, { x: 200, y: 400, size: 16, font });
+    }
+    const dir = await mkdtemp(join(tmpdir(), 'pdfrec-inset-'));
+    const file = join(dir, 'inset.pdf');
+    await writeFile(file, await doc.save());
+    return file;
+}
+
 const fixtureA = await makePdf('A', 3, false);   // Chapter 1..3
 const fixtureB = await makePdf('B', 2, true);    // 第1章、第2章
 const fixtureOutline = await makeOutlinePdf();   // 含兩層中文書籤
+const fixtureInset = await makeInsetPdf();       // 內容置中、四周大量白邊
 
 // 用 pdf.js 逐頁讀出文字 items（浮水印需要確認文字真的進到輸出、而且能被抽取）
 async function readPageTexts(targetPage, b64) {
@@ -1098,6 +1113,154 @@ const pnPos = await page9.evaluate(async (b64) => {
 check(!!pnPos && pnPos.x < pnPos.w * 0.35 && pnPos.y < pnPos.h * 0.15,
     '頁碼位置切到左下（座標驗證）', JSON.stringify(pnPos));
 check(errors9.length === 0, '頁碼格式流程沒有 pageerror／console error', errors9.slice(0, 2).join(' | '));
+
+// ── 20. 裁剪與統一頁面尺寸 ──
+const page10 = await browser.newPage();
+const errors10 = [];
+page10.on('pageerror', e => errors10.push('PAGEERROR ' + e.message));
+page10.on('console', m => { if (m.type() === 'error') errors10.push('CONSOLE ' + m.text().slice(0, 200)); });
+await page10.goto(BASE + '/index.html', { waitUntil: 'load' });
+await page10.evaluate(() => new Promise(r => { const q = indexedDB.deleteDatabase('pdf-recompose'); q.onsuccess = q.onerror = q.onblocked = () => r(); }));
+await page10.reload({ waitUntil: 'load' });
+await page10.waitForTimeout(400);
+
+await page10.setInputFiles('#fileInput', [fixtureInset], { timeout: 20000 });
+await page10.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
+await page10.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
+await page10.click('button:has-text("加入右側")');
+await page10.waitForTimeout(300);
+check(await page10.evaluate(() => document.querySelectorAll('#selectedPages .selected-page-item').length) === 2, '版面測試：2 頁就緒');
+check(await page10.evaluate(() => document.getElementById('layoutSettingsPanel').style.display === 'none'),
+    '未勾選版面調整時不顯示設定面板');
+await page10.evaluate(() => {
+    const cb = document.getElementById('enableLayoutCheckbox');
+    cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true }));
+});
+check(await page10.evaluate(() => document.getElementById('layoutSettingsPanel').style.display !== 'none'),
+    '勾選版面調整後展開設定面板');
+
+// 預設：維持原尺寸
+// 每次情境都先清空來源檔案：輸出不會累積，頁數與頁序都可預期
+const resetAll = async () => {
+    await page10.evaluate(() => {
+        const m = document.getElementById('previewModal');
+        if (m.open) m.close();
+        // 兩個清空動作都有「再次點擊確認」的機制，要各呼叫兩次才會真的清掉。
+        // 只清來源檔案不夠：右側成品是獨立的狀態，沒清掉的話下一次生成會把舊頁面一起帶進去。
+        clearAllFiles();
+        clearAllFiles();
+        clearSelectedPages();
+        clearSelectedPages();
+    });
+    await page10.waitForTimeout(200);
+};
+const genAndRead = async (label) => {
+    await page10.evaluate(() => { const m = document.getElementById('previewModal'); if (m.open) m.close(); });
+    await page10.click('#generateBtn');
+    await page10.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+    const ok = /預覽生成成功/.test(await page10.textContent('#progress'));
+    if (!ok) return { ok: false, detail: (await page10.textContent('#progress')).trim() };
+    const b64 = await page10.evaluate(async () => {
+        const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let s = '';
+        for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+        return btoa(s);
+    });
+    const d = await PDFDocument.load(Buffer.from(b64, 'base64'));
+    const all = d.getPages().map(p => { const sz = p.getSize(); return [Math.round(sz.width), Math.round(sz.height)]; });
+    // 這次產出會「附加」在既有內容之後，所以不能只看最後幾頁。
+    // 目錄頁固定是橫向 A4（842×595），用尺寸把它挑掉，剩下的就是這次的內容頁。
+    const isToc = ([w, h]) => w === 842 && h === 595;
+    const contentSizes = all.filter(sz => !isToc(sz));
+    return { ok: true, sizes: contentSizes.slice(-2), allSizes: all, b64 };
+};
+
+await resetAll();
+await page10.setInputFiles('#fileInput', [fixtureInset], { timeout: 20000 });
+await page10.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
+await page10.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
+await page10.click('button:has-text("加入右側")');
+await page10.waitForTimeout(300);
+const keep = await genAndRead('原尺寸');
+check(keep.ok && JSON.stringify(keep.sizes) === JSON.stringify([[595, 842], [595, 842]]),
+    '預設維持原尺寸', JSON.stringify(keep.sizes || keep.detail));
+
+// 白邊裁切
+await resetAll();
+await page10.setInputFiles('#fileInput', [fixtureInset], { timeout: 20000 });
+await page10.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
+await page10.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
+await page10.click('button:has-text("加入右側")');
+await page10.waitForTimeout(300);
+await page10.evaluate(() => {
+    document.getElementById('layoutFitSelect').value = 'content';
+    document.getElementById('layoutMarginInput').value = '20';
+});
+const cropped = await genAndRead('裁白邊');
+const cw = cropped.sizes && cropped.sizes[0][0];
+const ch = cropped.sizes && cropped.sizes[0][1];
+// 內容是 'Inset 1'（約 46×14pt），四邊再留 10pt → 大約 66×34；
+// 給寬鬆但有意義的範圍：遠小於 A4，且不會縮到幾乎沒有內容。
+check(cropped.ok && cw > 50 && cw < 120 && ch > 20 && ch < 100,
+    '「裁掉白邊」會縮到內容範圍附近', JSON.stringify(cropped.sizes || cropped.detail));
+check(cropped.sizes && Math.abs(cropped.sizes[0][0] - cropped.sizes[1][0]) <= 6 &&
+      Math.abs(cropped.sizes[0][1] - cropped.sizes[1][1]) <= 6,
+    '兩頁裁切後尺寸幾乎一致（差幾 pt 是文字寬度差異）', JSON.stringify(cropped.sizes));
+
+// 統一尺寸：A4
+await resetAll();
+await page10.setInputFiles('#fileInput', [fixtureInset], { timeout: 20000 });
+await page10.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
+await page10.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
+await page10.click('button:has-text("加入右側")');
+await page10.waitForTimeout(300);
+await page10.evaluate(() => {
+    document.getElementById('layoutFitSelect').value = 'original';
+    document.getElementById('uniformSizeSelect').value = 'a4';
+});
+const uniform = await genAndRead('統一 A4');
+check(uniform.ok && JSON.stringify(uniform.sizes) === JSON.stringify([[595, 842], [595, 842]]),
+    '統一成 A4', JSON.stringify(uniform.sizes || uniform.detail));
+
+// 統一尺寸：A5（應該比 A4 小）
+await resetAll();
+await page10.setInputFiles('#fileInput', [fixtureInset], { timeout: 20000 });
+await page10.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
+await page10.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
+await page10.click('button:has-text("加入右側")');
+await page10.waitForTimeout(300);
+await page10.evaluate(() => { document.getElementById('uniformSizeSelect').value = 'a5'; });
+const a5 = await genAndRead('統一 A5');
+check(a5.ok && a5.sizes.every(s => s[0] < 500 && s[1] < 700), '統一成 A5（尺寸真的變了）', JSON.stringify(a5.sizes));
+
+// 縮放後文字仍可抽取（不能變成圖片）
+// 同樣要挑掉目錄頁：只取「內容頁」的最後 2 頁
+const isTocText = (items) => /目錄/.test(items.join('')) && !/Inset/.test(items.join(''));
+const a5Texts = (await readPageTexts(page10, a5.b64)).filter(items => !isTocText(items)).slice(-2);
+check(a5Texts.length === 2 && a5Texts.every(items => items.some(t => /Inset/.test(t))),
+    '統一尺寸後文字仍可抽取（沒有變成圖片）', JSON.stringify(a5Texts));
+
+// 兩者併用：先裁白邊再統一成 A5
+await resetAll();
+await page10.setInputFiles('#fileInput', [fixtureInset], { timeout: 20000 });
+await page10.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
+await page10.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
+await page10.click('button:has-text("加入右側")');
+await page10.waitForTimeout(300);
+await page10.evaluate(() => {
+    document.getElementById('layoutFitSelect').value = 'content';
+    document.getElementById('layoutMarginInput').value = '20';
+    document.getElementById('uniformSizeSelect').value = 'a5';
+});
+const both = await genAndRead('裁白邊＋A5');
+check(both.ok && JSON.stringify(both.sizes) === JSON.stringify(a5.sizes),
+    '裁白邊與統一尺寸可以併用', JSON.stringify(both.sizes || both.detail));
+const bothTexts = (await readPageTexts(page10, both.b64)).filter(items => !isTocText(items)).slice(-2);
+check(bothTexts.length === 2 && bothTexts.every(items => items.some(t => /Inset/.test(t))),
+    '併用後文字仍可抽取', JSON.stringify(bothTexts));
+
+check(errors10.length === 0, '版面流程沒有 pageerror／console error', errors10.slice(0, 2).join(' | '));
 
 await browser.close();
 server.close();
