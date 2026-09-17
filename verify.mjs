@@ -632,6 +632,154 @@ check(JSON.stringify(noTocOutline.map(o => o.pageIndex)) ===
     `實際 ${noTocOutline.map(o => o.pageIndex).join(',')}`);
 check(errors6.length === 0, '只寫書籤的流程沒有 pageerror', errors6.slice(0, 2).join(' | '));
 
+// ── 16. 復原／重做 ──
+const page7 = await browser.newPage();
+const errors7 = [];
+page7.on('pageerror', e => errors7.push('PAGEERROR ' + e.message));
+page7.on('console', m => { if (m.type() === 'error') errors7.push('CONSOLE ' + m.text().slice(0, 200)); });
+await page7.goto(BASE + '/index.html', { waitUntil: 'load' });
+// 等一下讓啟動的 IndexedDB 檢查跑完（這頁沒有工作階段，不會跳對話框）
+await page7.waitForTimeout(400);
+await page7.setInputFiles('#fileInput', [fixtureA], { timeout: 20000 });
+await page7.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
+
+const targetCount = () => page7.evaluate(() => document.querySelectorAll('#selectedPages .selected-page-item').length);
+// 依目前 DOM 狀態把第 index 張設定成想要的值（toggleTargetCheck 是「切換」，
+// 直接呼叫會因為原本已勾選而反過來取消勾選）
+const setTargetChecked = (index, want) => page7.evaluate(({ index, want }) => {
+    const cb = document.querySelector(`#selectedPages [data-index="${index}"] .page-checkbox`);
+    if (!cb) return null;
+    if (cb.checked !== want) toggleTargetCheck(index);
+    return document.querySelector(`#selectedPages [data-index="${index}"] .page-checkbox`).checked;
+}, { index, want });
+const historyState = () => page7.evaluate(() => (typeof getHistoryState === 'function' ? getHistoryState() : null));
+
+await page7.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
+await page7.click('button:has-text("加入右側")');
+await page7.waitForTimeout(300);
+check(await targetCount() === 3, '加入 3 頁到右側', `實際 ${await targetCount()}`);
+const beforeUndo = await historyState();
+check(beforeUndo && beforeUndo.undoDepth >= 1, '加入頁面後有可復原的步驟', JSON.stringify(beforeUndo));
+
+await page7.click('#undoBtn');
+await page7.waitForTimeout(200);
+check(await targetCount() === 0, '復原會把「加入右側」整批還原', `實際 ${await targetCount()}`);
+const afterUndo = await historyState();
+check(afterUndo && afterUndo.redoDepth === 1, '復原後有可重做的步驟', JSON.stringify(afterUndo));
+
+await page7.click('#redoBtn');
+await page7.waitForTimeout(200);
+check(await targetCount() === 3, '重做會把剛才的批次加回來', `實際 ${await targetCount()}`);
+
+// 鍵盤捷徑
+await page7.keyboard.press('Control+z');
+await page7.waitForTimeout(200);
+check(await targetCount() === 0, 'Ctrl+Z 也能復原', `實際 ${await targetCount()}`);
+await page7.keyboard.press('Control+Shift+z');
+await page7.waitForTimeout(200);
+check(await targetCount() === 3, 'Ctrl+Shift+Z 也能重做', `實際 ${await targetCount()}`);
+
+// 新的操作要讓重做失效
+await page7.click('#undoBtn');
+await page7.waitForTimeout(200);
+await page7.evaluate(() => { clearAllSourceChecks(); toggleSourceCheck(0, 0); });
+await page7.click('button:has-text("加入右側")');
+await page7.waitForTimeout(300);
+const afterBranch = await historyState();
+check(afterBranch && afterBranch.redoDepth === 0, '復原後做新動作會清掉重做堆疊', JSON.stringify(afterBranch));
+check(await targetCount() === 1, '新動作的結果正確', `實際 ${await targetCount()}`);
+
+// 旋轉與刪除也要能復原
+check(await setTargetChecked(0, true) === true, '把唯一一張設成已勾選（旋轉用）');
+await page7.click('#targetPanel button:has-text("右轉")');
+await page7.waitForTimeout(200);
+const rotatedDeg = await page7.evaluate(() => document.querySelector('#selectedPages img.page-thumb-img')?.style.transform || '');
+await page7.click('#undoBtn');
+await page7.waitForTimeout(200);
+const rotatedAfterUndo = await page7.evaluate(() => document.querySelector('#selectedPages img.page-thumb-img')?.style.transform || '');
+check(/rotate\(90deg\)/.test(rotatedDeg) && !/rotate\(90deg\)/.test(rotatedAfterUndo),
+    '復原可以還原旋轉', `${rotatedDeg} -> ${rotatedAfterUndo}`);
+
+check(await setTargetChecked(0, true) === true, '把唯一一張設成已勾選');
+await page7.click('#targetPanel button:has-text("刪除")');
+await page7.waitForTimeout(300);
+check(await targetCount() === 0, '刪除生效', `實際 ${await targetCount()}`);
+await page7.click('#undoBtn');
+await page7.waitForTimeout(200);
+check(await targetCount() === 1, '復原可以還原刪除', `實際 ${await targetCount()}`);
+check(errors7.length === 0, '復原／重做流程沒有 pageerror', errors7.slice(0, 2).join(' | '));
+
+// ── 17. 工作階段還原（IndexedDB）──
+// 這段改用全新的分頁：前一段（復原／重做）已經在同一頁寫過工作階段，
+// 舊分頁排程中的保存會在我們清理之後才落地，把狀態蓋回來。
+const page8 = await browser.newPage();
+const errors8 = [];
+page8.on('pageerror', e => errors8.push('PAGEERROR ' + e.message));
+page8.on('console', m => { if (m.type() === 'error') errors8.push('CONSOLE ' + m.text().slice(0, 200)); });
+
+const hasIDB = await page8.evaluate(() => typeof indexedDB !== 'undefined').catch(() => false);
+await page8.goto(BASE + '/index.html', { waitUntil: 'load' });
+if (!hasIDB) {
+    console.log('（此環境沒有 IndexedDB，略過工作階段還原測試）');
+} else {
+    // 從乾淨的狀態開始
+    await page8.evaluate(() => new Promise((resolve) => {
+        const req = indexedDB.deleteDatabase('pdf-recompose');
+        req.onsuccess = req.onerror = req.onblocked = () => resolve();
+    }));
+    await page8.reload({ waitUntil: 'load' });
+    const readDb = () => page8.evaluate(() => new Promise((resolve) => {
+        const r = indexedDB.open('pdf-recompose', 1);
+        r.onsuccess = () => {
+            const g = r.result.transaction('session', 'readonly').objectStore('session').get('current');
+            g.onsuccess = () => { const v = g.result; r.result.close(); resolve(v ? (v.files || []).map(f => f.name) : null); };
+            g.onerror = () => resolve('ERR');
+        };
+        r.onerror = () => resolve('OPEN-ERR');
+    }));
+    check(await readDb() === null, '起始狀態沒有舊的工作階段');
+
+    await page8.setInputFiles('#fileInput', [fixtureB], { timeout: 20000 });
+    await page8.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
+    await page8.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
+    await page8.click('button:has-text("加入右側")');
+    await page8.waitForTimeout(300);
+    const savedOk = await page8.evaluate(() => (typeof flushSessionSave === 'function' ? flushSessionSave() : false));
+    check(savedOk === true, '工作階段寫入 IndexedDB 成功', String(savedOk));
+    check(JSON.stringify(await readDb()) === JSON.stringify(['B.pdf']), 'DB 內存的是剛載入的檔案', JSON.stringify(await readDb()));
+
+    // 重新載入：應該詢問是否還原
+    await page8.reload({ waitUntil: 'load' });
+    await page8.waitForSelector('#askDialog[open]', { timeout: 15000 });
+    const restorePrompt = await page8.evaluate(() => ({
+        title: document.getElementById('askDialogTitle').textContent,
+    }));
+    check(/還原/.test(restorePrompt.title), '重新開啟時會詢問是否還原工作階段', JSON.stringify(restorePrompt));
+    await page8.click('#askDialogOk'); // 確定還原
+    await page8.waitForFunction(() => /已還原/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+    await page8.waitForTimeout(600);
+    const restored = await page8.evaluate(() => ({
+        files: [...document.querySelectorAll('#fileList li span')].map(s => s.textContent),
+        target: document.querySelectorAll('#selectedPages .selected-page-item').length,
+        source: document.querySelectorAll('#sourcePages [data-page-key]').length,
+    }));
+    check(restored.files.length === 1 && restored.source === 2,
+        '還原後來源檔案與頁面回來了', JSON.stringify(restored));
+    check(restored.target === 2, '還原後右側的編排也回來了', JSON.stringify(restored));
+    check((await page8.evaluate(() => getHistoryState())).undoDepth === 0,
+        '還原後不會留下「還原前」的復原步驟');
+    check(errors8.length === 0, '工作階段還原流程沒有 pageerror', errors8.slice(0, 2).join(' | '));
+
+    // 選擇「不還原」之後要把工作階段清掉，下次不該再問
+    await page8.reload({ waitUntil: 'load' });
+    await page8.waitForSelector('#askDialog[open]', { timeout: 15000 });
+    const restorePrompt2 = await page8.evaluate(() => document.getElementById('askDialogTitle').textContent);
+    check(/還原/.test(restorePrompt2), '再次開啟仍會詢問還原', restorePrompt2);
+    await page8.click('#askDialogCancel');
+    await page8.waitForTimeout(600);
+    check(await readDb() === null, '選擇不還原後工作階段會被清掉', JSON.stringify(await readDb()));
+}
+
 await browser.close();
 server.close();
 

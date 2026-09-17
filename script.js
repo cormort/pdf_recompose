@@ -49,6 +49,31 @@ window.onload = function() {
     // 載入時就抽出來（pdf.js 文件之後會 destroy），用來預填目錄與寫入成品書籤。
     let sourceOutlines = new Map();
 
+    // --- 復原／重做 ---
+    // 快照只複製「會被改到的結構」（頁面屬性、selectedPages），縮圖 data URL 只共用參考，
+    // 所以每個快照的額外記憶體很小；真正的資料量只在寫入 IndexedDB 時才產生。
+    const HISTORY_LIMIT = 60;
+    const HISTORY_MERGE_MS = 400;   // 同類操作在此毫秒內合併成一步（例如連續拖曳排序）
+    let undoStack = [];
+    let redoStack = [];
+    let lastHistoryLabel = null;
+    let lastHistoryAt = 0;
+    let historyDepth = 0;           // 防止 undo/redo 本身再觸發記錄
+    let isRestoringSession = false;
+
+    // --- 工作階段保存 ---
+    const SESSION_DB = 'pdf-recompose';
+    const SESSION_STORE = 'session';
+    const SESSION_KEY = 'current';
+    const SESSION_SAVE_DEBOUNCE_MS = 1200;
+    const SESSION_MAX_DOC_BYTES = 80 * 1024 * 1024; // 超過就不自動存（避免撞配額）
+    let sessionSaveTimer = null;
+    let sessionSaveInFlight = false;
+    let sessionSavePending = false;
+    let sessionEnabled = true;
+    let sessionDirty = false;   // 有沒有「還沒寫進去的變更」
+    let sessionSavePromise = null; // 進行中的寫入（清空工作階段時要等它結束）
+
     // PDF 預覽相關
     let finalPdfBytes = null;
     let currentPreviewUrl = null;
@@ -135,6 +160,10 @@ window.onload = function() {
     window.resetTocSettings = resetTocSettings;
 
     // PDF 生成與預覽
+    window.undo = undo;
+    window.redo = redo;
+
+    // 目錄與設定
     window.generatePDF = generatePDF;
     window.downloadGeneratedPDF = downloadGeneratedPDF;
     window.closePreview = closePreview;
@@ -155,6 +184,17 @@ window.onload = function() {
     window.getTocSnapshot = () => selectedPages
         .filter(p => p && p.type !== 'divider')
         .map(p => ({ title: p.firstLine || null, level: p.level || 0, pageNum: p.pageNum }));
+    window.getHistoryState = () => ({
+        undoDepth: undoStack.length,
+        redoDepth: redoStack.length,
+        undoLabels: undoStack.map(e => e.label),
+        redoLabels: redoStack.map(e => e.label),
+    });
+    window.flushSessionSave = flushSessionSave;
+    window.clearSession = clearSession;
+    // 啟動時的「是否還原上次工作階段」檢查；呼叫端可以 await 它，
+    // 避免還原對話框還沒問完就跟其他操作打架。
+    window.sessionRestoreDone = null; // 由初始化階段填入
 
     // ------------------------------------------------------
     // 5. 事件監聽器綁定 (Event Listeners)
@@ -214,6 +254,26 @@ window.onload = function() {
         finalPdfBytes = null;
     });
 
+    // 復原／重做的鍵盤捷徑（在輸入框裡不要攔，否則會蓋掉打字undo）
+    window.addEventListener('keydown', (e) => {
+        const target = e.target;
+        const typing = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+        if (typing) return;
+        const mod = e.metaKey || e.ctrlKey;
+        if (!mod) return;
+        const key = (e.key || '').toLowerCase();
+        if (key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+        else if ((key === 'z' && e.shiftKey) || key === 'y') { e.preventDefault(); redo(); }
+    });
+
+    // 關閉／重新整理前把工作階段寫下去（用同步的方式無法寫 IndexedDB，
+    // 所以靠平時的 debounce 保存，這裡只補一次盡力而為的寫入）
+    window.addEventListener('beforeunload', () => {
+        // 只在「有還沒寫進去的變更」時才補寫。否則每次關頁都會發一個非同步寫入，
+        // 可能在別的操作（例如清掉工作階段）之後才落地，把狀態蓋回去。
+        if (sessionEnabled && sessionDirty && pdfFiles.length > 0) flushSessionSave();
+    });
+
     // 目錄設定面板切換（目錄頁才需要字型設定；純書籤不需要）
     addTocCheckbox.addEventListener('change', function() {
         tocSettingsPanel.style.display = this.checked ? 'block' : 'none';
@@ -233,6 +293,11 @@ window.onload = function() {
         tocSettingsPanel.style.display = 'block';
     }
     setupDragAndDrop(); // Sortable 綁在容器上，初始化一次即可
+    updateHistoryButtons();
+
+    // 啟動時詢問是否還原上次的工作階段（沒有就什麼都不做）。
+    // 存成 promise 讓呼叫端能等它問完，避免對話框跟其他操作打架。
+    window.sessionRestoreDone = maybeRestoreSession();
 
     // 左右面板寬度調整
     (function initPanelResizer() {
@@ -439,6 +504,7 @@ window.onload = function() {
             return;
         }
         isLoadingFiles = true;
+        const loadedBefore = pdfFiles.length;
         const fileInputEl = document.getElementById('fileInput');
         const generateBtn = document.getElementById('generateBtn');
         if (fileInputEl) fileInputEl.disabled = true;
@@ -538,8 +604,12 @@ window.onload = function() {
             }
         }
         fileInput.value = ''; // 允許再次選取同一個檔案
-        updateFileList();
-        renderSourcePages();
+        if (pdfFiles.length !== loadedBefore) {
+            applyEdit('載入檔案', () => {}); // 只有真的載入成功才記一步歷史
+        } else {
+            updateFileList();
+            renderSourcePages();
+        }
 
         if (loadedCount === 0) {
             progress.textContent = '❌ 所有檔案載入失敗';
@@ -565,6 +635,317 @@ window.onload = function() {
         if (pendingFileQueue.length > 0) {
             const queued = pendingFileQueue.splice(0, pendingFileQueue.length);
             handleFiles(queued);
+        }
+    }
+
+    // ------------------------------------------------------
+    // 復原／重做
+    // ------------------------------------------------------
+
+    // 只複製「會變動的結構」：檔案本體與縮圖 data URL 都共用參考，
+    // 所以一份快照的額外記憶體約等於頁數 × 幾十 bytes。
+    function makeSnapshot() {
+        return {
+            pdfFiles: pdfFiles.map(file => (file ? {
+                ...file,
+                pages: file.pages.map(p => ({ ...p })),
+            } : file)),
+            selectedPages: selectedPages.map(p => ({ ...p })),
+            sourceOutlines: new Map(sourceOutlines),
+        };
+    }
+
+    function applySnapshot(snapshot) {
+        pdfFiles = snapshot.pdfFiles.map(file => (file ? { ...file, pages: file.pages.map(p => ({ ...p })) } : file));
+        selectedPages = snapshot.selectedPages.map(p => ({ ...p }));
+        sourceOutlines = new Map(snapshot.sourceOutlines);
+    }
+
+    function updateHistoryButtons() {
+        const undoBtn = document.getElementById('undoBtn');
+        const redoBtn = document.getElementById('redoBtn');
+        if (undoBtn) {
+            undoBtn.disabled = undoStack.length === 0;
+            undoBtn.textContent = `↶ 復原${undoStack.length ? ` (${undoStack.length})` : ''}`;
+        }
+        if (redoBtn) {
+            redoBtn.disabled = redoStack.length === 0;
+            redoBtn.textContent = `↷ 重做${redoStack.length ? ` (${redoStack.length})` : ''}`;
+        }
+    }
+
+    // 包裝一次「編輯」：先記下變更前的狀態，跑完後補上變更後的狀態，
+    // 然後重繪與排程保存。一次呼叫就是一個 undo 步驟，前後的配對不可能漏掉。
+    // label 相同且在 HISTORY_MERGE_MS 內會合併成一步（例如拖曳排序的連續事件）。
+    function applyEdit(label, fn) {
+        const collecting = historyDepth === 0 && !isRestoringSession;
+        if (collecting) {
+            const now = Date.now();
+            const canMerge = label && label === lastHistoryLabel && (now - lastHistoryAt) < HISTORY_MERGE_MS;
+            if (!canMerge) {
+                undoStack.push({ snapshot: makeSnapshot(), label, after: null });
+                if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+                redoStack = [];
+            }
+            lastHistoryLabel = label;
+            lastHistoryAt = now;
+        }
+        historyDepth++;
+        try {
+            fn();
+        } finally {
+            historyDepth--;
+        }
+        if (collecting) {
+            const top = undoStack[undoStack.length - 1];
+            if (top && !top.after) top.after = makeSnapshot();
+            lastHistoryLabel = null;
+            lastHistoryAt = 0;
+        }
+        updateFileList();
+        renderSourcePages();
+        renderSelectedPages();
+        updateSelectedCountInfo();
+        updateHistoryButtons();
+        scheduleSessionSave();
+    }
+
+    function restoreSnapshot(snapshot) {
+        historyDepth++;
+        try {
+            applySnapshot(snapshot);
+            updateFileList();
+            renderSourcePages();
+            renderSelectedPages();
+            updateSelectedCountInfo();
+            updateQuickSelectFileOptions();
+        } finally {
+            historyDepth--;
+        }
+        updateHistoryButtons();
+        scheduleSessionSave();
+    }
+
+    function undo() {
+        if (undoStack.length === 0) {
+            showNotification('沒有可以復原的動作了', 'info');
+            return;
+        }
+        // undoStack 存的是「動作發生前」的狀態，所以直接還原它；
+        // 被還原掉的那一步要進 redoStack，redo 才有正確的出口。
+        const entry = undoStack.pop();
+        redoStack.push(entry);
+        restoreSnapshot(entry.snapshot); // 回到「動作發生前」
+        showNotification(`↶ 已復原${entry.label ? `：${entry.label}` : ''}`, 'success');
+    }
+
+    function redo() {
+        if (redoStack.length === 0) {
+            showNotification('沒有可以重做的動作了', 'info');
+            return;
+        }
+        // redoStack 裡存的是「動作發生前」的狀態，要回到動作後得先記下現況。
+        // 這裡的做法：把「動作後」的狀態還原回去——為此 redo 需要知道動作後的結果，
+        // 所以 undo 時把「動作後的快照」一併保存。
+        const entry = redoStack.pop();
+        undoStack.push(entry);
+        // redo 要回到「動作發生後」，所以用當時記下的 after 快照
+        restoreSnapshot(entry.after || entry.snapshot);
+        showNotification(`↷ 已重做${entry.label ? `：${entry.label}` : ''}`, 'success');
+    }
+
+    function resetHistory() {
+        undoStack = [];
+        redoStack = [];
+        lastHistoryLabel = null;
+        lastHistoryAt = 0;
+        updateHistoryButtons();
+    }
+
+    // ------------------------------------------------------
+    // 工作階段保存（IndexedDB）
+    // 讓不小心重新整理／關掉分頁時，已載入的檔案與編排還在。
+    // ------------------------------------------------------
+
+    function openSessionDb() {
+        return new Promise((resolve, reject) => {
+            if (typeof indexedDB === 'undefined') { reject(new Error('no indexedDB')); return; }
+            const req = indexedDB.open(SESSION_DB, 1);
+            req.onupgradeneeded = () => {
+                const db = req.result;
+                if (!db.objectStoreNames.contains(SESSION_STORE)) db.createObjectStore(SESSION_STORE);
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    function idbRequest(req) {
+        return new Promise((resolve, reject) => {
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    async function idbPut(key, value) {
+        const db = await openSessionDb();
+        try {
+            const tx = db.transaction(SESSION_STORE, 'readwrite');
+            await idbRequest(tx.objectStore(SESSION_STORE).put(value, key));
+        } finally { db.close(); }
+    }
+
+    async function idbGet(key) {
+        const db = await openSessionDb();
+        try {
+            const tx = db.transaction(SESSION_STORE, 'readonly');
+            return await idbRequest(tx.objectStore(SESSION_STORE).get(key));
+        } finally { db.close(); }
+    }
+
+    async function idbDelete(key) {
+        const db = await openSessionDb();
+        try {
+            const tx = db.transaction(SESSION_STORE, 'readwrite');
+            await idbRequest(tx.objectStore(SESSION_STORE).delete(key));
+        } finally { db.close(); }
+    }
+
+    // 組出可寫入 IndexedDB 的工作階段（File 可被結構化複製，直接存）
+    async function buildSessionPayload() {
+        const files = [];
+        let totalBytes = 0;
+        for (const file of pdfFiles) {
+            if (!file || !file.file) continue;
+            totalBytes += file.file.size || 0;
+            files.push({
+                name: file.name,
+                bytes: new Uint8Array(await file.file.arrayBuffer()),
+                outline: file.outline || [],
+            });
+        }
+        return {
+            version: 1,
+            savedAt: Date.now(),
+            files,
+            totalBytes,
+            selectedPages: selectedPages.map(p => ({ ...p })),
+            // Map 不能直接存，轉成陣列
+            sourceOutlines: [...sourceOutlines.entries()].map(([name, map]) => [name, [...map.entries()]]),
+            view: { viewMode, thumbnailSize, targetViewMode, targetThumbnailSize },
+            tocSettings: {
+                addToc: addTocCheckbox.checked,
+                addBookmarks: !!(document.getElementById('addBookmarksCheckbox') || {}).checked,
+                addPageNumbers: document.getElementById('addPageNumbersCheckbox').checked,
+            },
+        };
+    }
+
+    // 清掉工作階段：不只要刪資料，還要停掉自動保存，
+    // 否則已經排程的 debounce 會在刪除之後又把狀態寫回來（實測就是這樣蓋回去的）。
+    async function clearSession() {
+        // 不只要刪資料，還要停掉自動保存：已經排程的 debounce、以及正在飛的寫入，
+        // 只要晚一步落地就會把剛刪掉的工作階段又寫回來（實測就是這樣蓋回去的）。
+        sessionEnabled = false;
+        sessionDirty = false;
+        if (sessionSaveTimer) { clearTimeout(sessionSaveTimer); sessionSaveTimer = null; }
+        sessionSavePending = false;
+        if (sessionSavePromise) { try { await sessionSavePromise; } catch (e) {} }
+        return idbDelete(SESSION_KEY).catch(() => {});
+    }
+
+    // 立即寫入（測試與 beforeunload 用）。成功回傳 true。
+    async function flushSessionSave() {
+        if (!sessionEnabled || pdfFiles.length === 0) return false;
+        try {
+            const payload = await buildSessionPayload();
+            if (payload.totalBytes > SESSION_MAX_DOC_BYTES) {
+                sessionEnabled = false; // 太大，之後不再嘗試
+                showNotification('⚠️ 檔案較大，已停止自動保存工作階段（不影響操作）', 'info');
+                return false;
+            }
+            await idbPut(SESSION_KEY, payload);
+            sessionDirty = false;
+            return true;
+        } catch (error) {
+            console.error('保存工作階段失敗：', error);
+            sessionEnabled = false;
+            return false;
+        }
+    }
+
+    function scheduleSessionSave() {
+        if (!sessionEnabled || isRestoringSession) return;
+        sessionDirty = true;
+        if (sessionSaveTimer) clearTimeout(sessionSaveTimer);
+        sessionSaveTimer = setTimeout(() => {
+            sessionSaveTimer = null;
+            if (sessionSaveInFlight) { sessionSavePending = true; return; }
+            sessionSaveInFlight = true;
+            sessionSavePromise = flushSessionSave().finally(() => {
+                sessionSaveInFlight = false;
+                sessionSavePromise = null;
+                if (sessionSavePending) { sessionSavePending = false; scheduleSessionSave(); }
+            });
+        }, SESSION_SAVE_DEBOUNCE_MS);
+    }
+
+    // 啟動時詢問是否還原上次的工作階段
+    async function maybeRestoreSession() {
+        let payload = null;
+        try {
+            payload = await idbGet(SESSION_KEY);
+        } catch (error) {
+            return; // 沒有 IndexedDB 或讀不到就當作沒有工作階段
+        }
+        if (!payload || !Array.isArray(payload.files) || payload.files.length === 0) return;
+
+        const when = payload.savedAt ? new Date(payload.savedAt).toLocaleString() : '上次';
+        const names = payload.files.map(f => f.name).join('、');
+        const ok = await askConfirm(`偵測到上次的工作階段（${names}，${when}）。要還原嗎？`);
+        if (!ok) { await clearSession(); return; }
+
+        const fileList = payload.files.map(f => new File([f.bytes], f.name, { type: 'application/pdf' }));
+        isRestoringSession = true;
+        progress.textContent = '⏳ 正在還原上次的工作階段...';
+        progress.classList.add('active');
+        try {
+            // 用既有的載入流程重建縮圖，再套回編排
+            await handleFiles(fileList);
+            payload.files.forEach((f, index) => {
+                if (pdfFiles[index]) pdfFiles[index].outline = f.outline || [];
+            });
+            selectedPages = (payload.selectedPages || []).map(p => ({ ...p }));
+            sourceOutlines = new Map((payload.sourceOutlines || []).map(([name, entries]) => [name, new Map(entries)]));
+            if (payload.view) {
+                viewMode = payload.view.viewMode || viewMode;
+                thumbnailSize = payload.view.thumbnailSize || thumbnailSize;
+                targetViewMode = payload.view.targetViewMode || targetViewMode;
+                targetThumbnailSize = payload.view.targetThumbnailSize || targetThumbnailSize;
+            }
+            if (payload.tocSettings) {
+                addTocCheckbox.checked = !!payload.tocSettings.addToc;
+                tocSettingsPanel.style.display = addTocCheckbox.checked ? 'block' : 'none';
+                const bmBox = document.getElementById('addBookmarksCheckbox');
+                if (bmBox) bmBox.checked = !!payload.tocSettings.addBookmarks;
+                document.getElementById('addPageNumbersCheckbox').checked = !!payload.tocSettings.addPageNumbers;
+            }
+            setViewMode(viewMode);
+            setThumbnailSize(thumbnailSize);
+            setTargetViewMode(targetViewMode);
+            setTargetThumbnailSize(targetThumbnailSize);
+            renderSelectedPages();
+            updateSelectedCountInfo();
+            resetHistory(); // 還原後不讓使用者 undo 回上一個工作階段
+            progress.textContent = `✅ 已還原 ${pdfFiles.length} 個檔案、${selectedPages.length} 個成品項目`;
+            progress.classList.add('success');
+            setTimeout(() => progress.classList.remove('active', 'success'), 3000);
+        } catch (error) {
+            console.error('還原工作階段失敗：', error);
+            showNotification('⚠️ 還原工作階段失敗，已略過。', 'error');
+            progress.classList.remove('active');
+        } finally {
+            isRestoringSession = false;
         }
     }
 
@@ -745,16 +1126,15 @@ window.onload = function() {
         if (usedByTarget && !(await askConfirm(`「${file ? file.name : '此檔案'}」有頁面在右側成品中，移除後會一併從成品刪除。確定移除嗎？`))) {
             return;
         }
-        if (file) sourceOutlines.delete(file.name);
-        pdfFiles.splice(index, 1);
-        selectedPages = selectedPages.filter(p => p.fileIndex !== index).map(p => {
-            if (p.fileIndex > index) p.fileIndex--;
-            return p;
+        applyEdit('移除來源檔案', () => {
+            if (file) sourceOutlines.delete(file.name);
+            pdfFiles.splice(index, 1);
+            selectedPages = selectedPages.filter(p => p.fileIndex !== index).map(p => {
+                if (p.fileIndex > index) p.fileIndex--;
+                return p;
+            });
+            selectedPages = pruneOrphanDividers(selectedPages);
         });
-        selectedPages = pruneOrphanDividers(selectedPages);
-        updateFileList();
-        renderSourcePages();
-        renderSelectedPages();
     }
 
     function clearAllFiles() {
@@ -771,20 +1151,21 @@ window.onload = function() {
             }, 3000);
             return;
         }
-        pdfFiles = [];
-        selectedPages = [];
-        sourceOutlines.clear();
-        lastSourceClickGlobalIndex = null;
         clearFilesConfirmMode = false;
+        clearBtn.classList.remove('confirm-mode');
+        clearBtn.innerHTML = '🗑️ 清除所有檔案';
         fileInput.value = '';
         // 釋放預覽/生成的暫存資源
         finalPdfBytes = null;
         if (previewModal.open) previewModal.close();
-        clearBtn.classList.remove('confirm-mode');
-        clearBtn.innerHTML = '🗑️ 清除所有檔案';
-        updateFileList();
-        renderSourcePages();
-        renderSelectedPages();
+        resetHistory(); // 全部清掉之後沒有東西可以復原了
+        clearSession();
+        applyEdit('清除所有檔案', () => {
+            pdfFiles = [];
+            selectedPages = [];
+            sourceOutlines.clear();
+            lastSourceClickGlobalIndex = null;
+        });
     }
 
     // ======================================================
@@ -989,7 +1370,12 @@ window.onload = function() {
     // --- 批次操作 (Source) ---
 
     function batchAddToTarget() {
+        if (!pdfFiles.some(file => file && file.pages.some(p => p.isChecked))) {
+            showNotification('⚠️ 請先勾選要加入的頁面', 'info');
+            return;
+        }
         let addedCount = 0;
+        applyEdit('加入右側', () => {
         pdfFiles.forEach((file, fIndex) => {
             file.pages.forEach((page, pIndex) => {
                 if (page.isChecked) {
@@ -1010,14 +1396,10 @@ window.onload = function() {
             });
         });
 
-        if (addedCount > 0) {
-            renderSelectedPages();
-            showNotification(`✅ 已加入 ${addedCount} 個頁面到右側`, 'success');
-            const container = document.getElementById('selectedPages');
-            container.scrollTop = container.scrollHeight;
-        } else {
-            showNotification('⚠️ 請先勾選要加入的頁面', 'info');
-        }
+        });
+        showNotification(`✅ 已加入 ${addedCount} 個頁面到右側`, 'success');
+        const container = document.getElementById('selectedPages');
+        container.scrollTop = container.scrollHeight;
     }
 
     async function batchDeleteFromSource() {
@@ -1049,17 +1431,14 @@ window.onload = function() {
             }
         });
 
-        pdfFiles = newPdfFiles;
-        selectedPages = selectedPages.filter(p => p.type === 'divider' || indexMap.has(p.fileIndex));
-        selectedPages.forEach(p => { if (p.type !== 'divider') p.fileIndex = indexMap.get(p.fileIndex); });
-        // 來源被刪光的小節標題會變成孤兒（後面沒有內容頁），留著只會讓目錄多出空章節。
-        selectedPages = pruneOrphanDividers(selectedPages);
-        document.getElementById('selectAllSource').checked = false;
-
-        updateFileList();
-        renderSourcePages();
-        renderSelectedPages();
-        updateSelectedCountInfo();
+        applyEdit('刪除來源頁面', () => {
+            pdfFiles = newPdfFiles;
+            selectedPages = selectedPages.filter(p => p.type === 'divider' || indexMap.has(p.fileIndex));
+            selectedPages.forEach(p => { if (p.type !== 'divider') p.fileIndex = indexMap.get(p.fileIndex); });
+            // 來源被刪光的小節標題會變成孤兒（後面沒有內容頁），留著只會讓目錄多出空章節。
+            selectedPages = pruneOrphanDividers(selectedPages);
+            document.getElementById('selectAllSource').checked = false;
+        });
         showNotification(`🗑️ 已刪除 ${deletedCount} 個頁面`, 'success');
     }
 
@@ -1080,6 +1459,7 @@ window.onload = function() {
         });
 
         if (rotatedCount > 0) {
+            applyEdit('旋轉來源頁面', () => {});
             applySourceRotationDom();
             showNotification(`↻ 已旋轉 ${rotatedCount} 個頁面`, 'success');
         } else {
@@ -1322,40 +1702,40 @@ window.onload = function() {
     // --- 批次操作 (Target) ---
 
     function batchDeleteFromTarget() {
-        const initialLen = selectedPages.length;
-        // 小節分隔線沒有 isChecked，不能被當成「未勾選」而意外刪掉；
-        // 勾選語意只針對內容頁，分隔線一律保留。
-        selectedPages = selectedPages.filter(p => p && (p.type === 'divider' || !p.isChecked));
-
-        const deletedCount = initialLen - selectedPages.length;
-        if (deletedCount > 0) {
-            renderSelectedPages();
-            document.getElementById('selectAllTarget').checked = false;
-            showNotification(`已從右側移除 ${deletedCount} 頁`, 'success');
-        } else {
+        if (!selectedPages.some(p => p && p.type !== 'divider' && p.isChecked)) {
             showNotification('請先勾選右側頁面', 'info');
+            return;
         }
+        const initialLen = selectedPages.length;
+        applyEdit('從成品刪除頁面', () => {
+            // 小節分隔線沒有 isChecked，不能被當成「未勾選」而意外刪掉；
+            // 勾選語意只針對內容頁，分隔線一律保留。
+            selectedPages = selectedPages.filter(p => p && (p.type === 'divider' || !p.isChecked));
+            document.getElementById('selectAllTarget').checked = false;
+        });
+        showNotification(`已從右側移除 ${initialLen - selectedPages.length} 頁`, 'success');
     }
 
     function batchRotateTarget(deg) {
-        let count = 0;
-        selectedPages.forEach(p => {
-            if (p.isChecked && p.type !== 'divider') {
-                const current = p.rotation || 0;
-                p.rotation = (current + deg + 360) % 360;
-                count++;
-            }
-        });
-        if (count > 0) {
-            applyTargetRotationDom();
-        } else {
+        if (!selectedPages.some(p => p && p.isChecked && p.type !== 'divider')) {
             showNotification('請先勾選右側頁面', 'info');
+            return;
         }
+        applyEdit('旋轉成品頁面', () => {
+            selectedPages.forEach(p => {
+                if (p.isChecked && p.type !== 'divider') {
+                    const current = p.rotation || 0;
+                    p.rotation = (current + deg + 360) % 360;
+                }
+            });
+        });
+        applyTargetRotationDom();
     }
 
     function removeSelectedPage(index) {
-        selectedPages.splice(index, 1);
-        renderSelectedPages();
+        applyEdit('移除單一頁面', () => {
+            selectedPages.splice(index, 1);
+        });
     }
 
     // 與左側一致：智慧勾選＝一次篩選（取代現有勾選）。
@@ -1407,22 +1787,24 @@ window.onload = function() {
             }, 3000);
             return;
         }
-        selectedPages = [];
         clearSelectedConfirmMode = false;
         btn.classList.remove('confirm-mode');
         btn.textContent = '🗑️ 清空全部';
-        renderSelectedPages();
+        applyEdit('清空成品', () => {
+            selectedPages = [];
+        });
     }
 
     async function addSectionDivider() {
         const title = await askText("請輸入小節標題：");
         if (title && title.trim()) {
-            selectedPages.push({
-                type: 'divider',
-                firstLine: title.trim(),
-                id: Date.now()
+            applyEdit('新增小節', () => {
+                selectedPages.push({
+                    type: 'divider',
+                    firstLine: title.trim(),
+                    id: Date.now()
+                });
             });
-            renderSelectedPages();
         }
     }
 
@@ -1438,9 +1820,10 @@ window.onload = function() {
             ghostClass: 'dragging',
             onEnd: (evt) => {
                 if (evt.oldIndex === evt.newIndex) return;
-                const [movedItem] = selectedPages.splice(evt.oldIndex, 1);
-                selectedPages.splice(evt.newIndex, 0, movedItem);
-                renderSelectedPages();
+                applyEdit('調整頁面順序', () => {
+                    const [movedItem] = selectedPages.splice(evt.oldIndex, 1);
+                    selectedPages.splice(evt.newIndex, 0, movedItem);
+                });
             }
         });
     }
@@ -1506,16 +1889,17 @@ window.onload = function() {
             return;
         }
         let titleIndex = 0;
-        selectedPages.forEach(item => {
-            if (item && item.type !== 'divider') {
-                const line = rawLines[titleIndex];
-                const title = line.replace(/^[ \t]+/, '').trim();
-                item.firstLine = title || `Page ${item.pageNum || '?'}`;
-                item.level = levelFromIndent(line);
-                titleIndex++;
-            }
+        applyEdit('編輯目錄', () => {
+            selectedPages.forEach(item => {
+                if (item && item.type !== 'divider') {
+                    const line = rawLines[titleIndex];
+                    const title = line.replace(/^[ \t]+/, '').trim();
+                    item.firstLine = title || `Page ${item.pageNum || '?'}`;
+                    item.level = levelFromIndent(line);
+                    titleIndex++;
+                }
+            });
         });
-        renderSelectedPages();
         closeTocEditor();
     }
 

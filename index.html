@@ -315,6 +315,13 @@
                     <div class="toolbar-separator"></div>
 
                     <div class="batch-btn-group">
+                        <button class="btn-panel-action btn-history" id="undoBtn" onclick="undo()" title="復原 (Ctrl+Z)" disabled>↶ 復原</button>
+                        <button class="btn-panel-action btn-history" id="redoBtn" onclick="redo()" title="重做 (Ctrl+Shift+Z)" disabled>↷ 重做</button>
+                    </div>
+
+                    <div class="toolbar-separator"></div>
+
+                    <div class="batch-btn-group">
                         <button class="btn-panel-action btn-add-section" onclick="addSectionDivider()">➕ 新增小節</button>
                         <button class="btn-panel-action btn-edit" onclick="openTocEditor()">✏️ 編輯目錄</button>
                         <button class="btn-panel-action btn-clear" id="clearSelectedBtn" onclick="clearSelectedPages()">🗑️ 清空全部</button>

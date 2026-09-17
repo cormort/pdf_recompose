@@ -309,6 +309,11 @@ body {
 .btn-rotate-left, .btn-rotate-right { background: var(--default-100); color: var(--default-700); }
 .btn-rotate-left:hover, .btn-rotate-right:hover { background: var(--default-200); opacity: 1; }
 
+/* 復原／重做：中性色，停用時淡化 */
+.btn-history { background: var(--default-700); }
+.btn-history:hover:not(:disabled) { background: var(--default-900); }
+.btn-history:disabled { opacity: .35; cursor: default; }
+
 .btn-add { background: var(--success); }
 .btn-delete { background: var(--danger); }
 .btn-add-section { background: var(--success-600); }
