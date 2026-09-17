@@ -153,6 +153,23 @@ const fixtureA = await makePdf('A', 3, false);   // Chapter 1..3
 const fixtureB = await makePdf('B', 2, true);    // 第1章、第2章
 const fixtureOutline = await makeOutlinePdf();   // 含兩層中文書籤
 
+// 用 pdf.js 逐頁讀出文字 items（浮水印需要確認文字真的進到輸出、而且能被抽取）
+async function readPageTexts(targetPage, b64) {
+    return targetPage.evaluate(async (data64) => {
+        const bin = atob(data64); const data = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+        const doc = await window.pdfjsLib.getDocument({ data }).promise;
+        const out = [];
+        for (let i = 1; i <= doc.numPages; i++) {
+            const tc = await (await doc.getPage(i)).getTextContent();
+            out.push(tc.items.filter(it => it.str && it.str.trim()).map(it => it.str));
+        }
+        await doc.destroy();
+        return out;
+    }, b64);
+}
+
 // 用 pdf.js 讀出 PDF 的大綱（標題 / 階層 / 實際頁碼）
 async function readOutline(targetPage, b64) {
     return targetPage.evaluate(async (data64) => {
@@ -779,6 +796,124 @@ if (!hasIDB) {
     await page8.waitForTimeout(600);
     check(await readDb() === null, '選擇不還原後工作階段會被清掉', JSON.stringify(await readDb()));
 }
+
+// ── 18. 浮水印 ──
+const page9 = await browser.newPage();
+const errors9 = [];
+page9.on('pageerror', e => errors9.push('PAGEERROR ' + e.message));
+page9.on('console', m => { if (m.type() === 'error') errors9.push('CONSOLE ' + m.text().slice(0, 200)); });
+await page9.goto(BASE + '/index.html', { waitUntil: 'load' });
+await page9.evaluate(() => new Promise(r => { const q = indexedDB.deleteDatabase('pdf-recompose'); q.onsuccess = q.onerror = q.onblocked = () => r(); }));
+await page9.reload({ waitUntil: 'load' });
+await page9.waitForTimeout(400);
+
+await page9.setInputFiles('#fileInput', [fixtureA], { timeout: 20000 });
+await page9.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
+await page9.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
+await page9.click('button:has-text("加入右側")');
+await page9.waitForTimeout(300);
+check(await page9.evaluate(() => document.querySelectorAll('#selectedPages .selected-page-item').length) === 3, '浮水印測試：3 頁就緒');
+
+// 只有勾了浮水印才應該出現設定面板
+check(await page9.evaluate(() => document.getElementById('watermarkSettingsPanel').style.display === 'none'),
+    '未勾選浮水印時不顯示設定面板');
+await page9.evaluate(() => {
+    const cb = document.getElementById('addWatermarkCheckbox');
+    cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true }));
+});
+check(await page9.evaluate(() => document.getElementById('watermarkSettingsPanel').style.display !== 'none'),
+    '勾選浮水印後展開設定面板');
+
+// 型態一：置中單一，中文
+await page9.fill('#watermarkText', '機密文件');
+await page9.selectOption('#watermarkLayout', 'center');
+await page9.fill('#watermarkSize', '40');
+await page9.fill('#watermarkOpacity', '0.3');
+await page9.fill('#watermarkRange', '');
+await page9.click('#generateBtn');
+await page9.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+check(/預覽生成成功/.test(await page9.textContent('#progress')), '浮水印生成成功', (await page9.textContent('#progress')).trim());
+
+const wmB64 = await page9.evaluate(async () => {
+    const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return btoa(s);
+});
+const wmTexts = await readPageTexts(page9, wmB64);
+const countWatermark = (items, label) => items.filter(t => t.replace(/\s+/g, '') === label).length;
+check(wmTexts.length === 3, '浮水印不改變頁數', `實際 ${wmTexts.length}`);
+check(wmTexts.every(items => countWatermark(items, '機密文件') === 1),
+    '每一頁都有一個置中浮水印，且中文可被抽取',
+    JSON.stringify(wmTexts.map(t => countWatermark(t, '機密文件'))));
+check(wmTexts.every(items => items.some(t => /Chapter/.test(t))),
+    '原本的頁面文字沒有被浮水印蓋掉（仍然抽得到）');
+
+// 型態二：平鋪 → 同一頁出現多個
+await page9.evaluate(() => document.getElementById('previewModal').close());
+await page9.selectOption('#watermarkLayout', 'tile');
+await page9.click('#generateBtn');
+await page9.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+const tileB64 = await page9.evaluate(async () => {
+    const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return btoa(s);
+});
+const tileTexts = await readPageTexts(page9, tileB64);
+check(tileTexts.every(items => countWatermark(items, '機密文件') >= 4),
+    '平鋪模式每頁出現多個浮水印', JSON.stringify(tileTexts.map(t => countWatermark(t, '機密文件'))));
+
+// 型態三：頁面範圍只蓋第 2 頁
+await page9.evaluate(() => document.getElementById('previewModal').close());
+await page9.selectOption('#watermarkLayout', 'center');
+await page9.fill('#watermarkRange', '2');
+await page9.click('#generateBtn');
+await page9.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+const rangeB64 = await page9.evaluate(async () => {
+    const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return btoa(s);
+});
+const rangeCounts = (await readPageTexts(page9, rangeB64)).map(items => countWatermark(items, '機密文件'));
+check(JSON.stringify(rangeCounts) === JSON.stringify([0, 1, 0]),
+    '頁面範圍「2」只蓋第 2 頁', JSON.stringify(rangeCounts));
+
+// 型態四：範圍語法 1-2,3 全部涵蓋
+await page9.evaluate(() => document.getElementById('previewModal').close());
+await page9.fill('#watermarkRange', '1-2,3');
+await page9.click('#generateBtn');
+await page9.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+const range2B64 = await page9.evaluate(async () => {
+    const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return btoa(s);
+});
+const range2Counts = (await readPageTexts(page9, range2B64)).map(items => countWatermark(items, '機密文件'));
+check(JSON.stringify(range2Counts) === JSON.stringify([1, 1, 1]),
+    '範圍語法「1-2,3」涵蓋全部三頁', JSON.stringify(range2Counts));
+
+// 空字串時不應該蓋任何東西（避免整份文件被空白浮水印污染）
+await page9.evaluate(() => document.getElementById('previewModal').close());
+await page9.fill('#watermarkText', '   ');
+await page9.click('#generateBtn');
+await page9.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+const blankB64 = await page9.evaluate(async () => {
+    const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return btoa(s);
+});
+const blankCounts = (await readPageTexts(page9, blankB64)).map(items => countWatermark(items, '機密文件'));
+check(blankCounts.every(n => n === 0), '空白浮水印文字不會蓋上去', JSON.stringify(blankCounts));
+check(errors9.length === 0, '浮水印流程沒有 pageerror／console error', errors9.slice(0, 2).join(' | '));
 
 await browser.close();
 server.close();

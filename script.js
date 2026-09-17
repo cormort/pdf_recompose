@@ -116,6 +116,7 @@ window.onload = function() {
     const notification = document.getElementById('notification');
     const addTocCheckbox = document.getElementById('addTocCheckbox');
     const tocSettingsPanel = document.getElementById('tocSettingsPanel');
+    const watermarkSettingsPanel = document.getElementById('watermarkSettingsPanel');
     const previewModal = document.getElementById('previewModal');
 
     // ------------------------------------------------------
@@ -158,6 +159,7 @@ window.onload = function() {
     window.saveToc = saveToc;
     window.prefillTocFromSource = prefillTocFromSource;
     window.resetTocSettings = resetTocSettings;
+    window.resetWatermarkSettings = resetWatermarkSettings;
 
     // PDF 生成與預覽
     window.undo = undo;
@@ -278,6 +280,14 @@ window.onload = function() {
     addTocCheckbox.addEventListener('change', function() {
         tocSettingsPanel.style.display = this.checked ? 'block' : 'none';
     });
+
+    // 浮水印設定面板切換
+    const addWatermarkCheckbox = document.getElementById('addWatermarkCheckbox');
+    if (addWatermarkCheckbox) {
+        addWatermarkCheckbox.addEventListener('change', function() {
+            watermarkSettingsPanel.style.display = this.checked ? 'block' : 'none';
+        });
+    }
 
     // ------------------------------------------------------
     // 6. 初始化執行 (Initialization)
@@ -639,6 +649,146 @@ window.onload = function() {
     }
 
     // ------------------------------------------------------
+    // 浮水印／印章
+    // ------------------------------------------------------
+
+    const WATERMARK_COLORS = {
+        red: [0.85, 0.10, 0.15],
+        gray: [0.45, 0.45, 0.48],
+        blue: [0.10, 0.35, 0.80],
+        black: [0.10, 0.10, 0.10],
+    };
+
+    // 頁面範圍：支援 1-3,5,7- 這種寫法；空字串＝全部
+    function parsePageRange(spec, total) {
+        const all = new Set();
+        for (let i = 1; i <= total; i++) all.add(i);
+        const text = String(spec || '').trim();
+        if (!text) return all;
+
+        const picked = new Set();
+        for (const rawPart of text.split(',')) {
+            const part = rawPart.trim().replace(/[~～—]/g, '-');
+            if (!part) continue;
+            const range = part.match(/^(\d+)?\s*-\s*(\d+)?$/);
+            if (range) {
+                const start = range[1] ? parseInt(range[1], 10) : 1;
+                const end = range[2] ? parseInt(range[2], 10) : total;
+                const lo = Math.max(1, Math.min(start, end));
+                const hi = Math.min(total, Math.max(start, end));
+                for (let i = lo; i <= hi; i++) picked.add(i);
+                continue;
+            }
+            const single = parseInt(part, 10);
+            if (Number.isFinite(single) && single >= 1 && single <= total) picked.add(single);
+        }
+        return picked;
+    }
+
+    // 數字欄位：夾在合理區間，避免有人填 0 或負數
+    const clampNumber = (value, min, max, fallback) => {
+        const n = parseFloat(value);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.min(max, Math.max(min, n));
+    };
+
+    function readWatermarkConfig() {
+        const text = (document.getElementById('watermarkText').value || '').trim();
+        const colorKey = document.getElementById('watermarkColor').value;
+        return {
+            text,
+            // 空字串代表「不蓋浮水印」，不是「蓋空白」
+            enabled: !!text,
+            layout: document.getElementById('watermarkLayout').value === 'tile' ? 'tile' : 'center',
+            // 只做 -90~90 度：180 度會變成上下顛倒的字，實務上沒人這樣蓋章
+            angle: clampNumber(document.getElementById('watermarkAngle').value, -90, 90, 45),
+            size: clampNumber(document.getElementById('watermarkSize').value, 8, 200, 40),
+            opacity: clampNumber(document.getElementById('watermarkOpacity').value, 5, 100, 18) / 100,
+            color: WATERMARK_COLORS[colorKey] || WATERMARK_COLORS.red,
+        };
+    }
+
+    // 文字寬度：ASCII 走 Helvetica、中文走 CJK 字型，跟目錄同一套規則
+    function watermarkTextWidth(text, size, cjkFont, asciiFont) {
+        return splitMixedRuns(text).reduce((w, run) => {
+            const font = run.ascii ? asciiFont : cjkFont;
+            try { return w + font.widthOfTextAtSize(run.s, size); } catch (e) { return w; }
+        }, 0);
+    }
+
+    // 同一個 ExtGState 名稱可以在不同頁面重複使用（Resources 是每頁各自的），
+    // 只有同一頁要蓋兩次時才需要換名字，否則會多出用不到的資源。
+    function findOrCreateExtGState(page, name, dict) {
+        const context = page.doc.context;
+        const resources = page.node.Resources();
+        if (resources) {
+            const existing = resources.lookup(globalThis.PDFLib.PDFName.of('ExtGState'));
+            if (existing && existing.has && existing.has(globalThis.PDFLib.PDFName.of(name))) {
+                return globalThis.PDFLib.PDFName.of(name);
+            }
+        }
+        return page.node.newExtGState(name, context.obj(dict));
+    }
+
+    // rgb 由呼叫端提供（PDFLib 的解構在 generatePDF 裡，模組層級拿不到）
+    function drawWatermarkOnPage(page, config, fonts) {
+        const wmColor = fonts.rgb(config.color[0], config.color[1], config.color[2]);
+        if (config.layout === 'tile') {
+            drawTiledWatermark(page, config, fonts, wmColor);
+            return;
+        }
+        const { width, height } = page.getSize();
+        drawMixedText(page, config.text, width / 2, height / 2, config.size, fonts.centerFont, fonts.asciiFont,
+            wmColor, { opacity: config.opacity, rotate: fonts.degrees(config.angle), centerX: true });
+    }
+
+    function drawTiledWatermark(page, config, fonts, wmColor) {
+        const { width, height } = page.getSize();
+        const center = fonts.centerFont;
+        const wmWidth = Math.max(1, watermarkTextWidth(config.text, config.size, center, fonts.asciiFont));
+        const wmHeight = config.size;
+        // 間距要用「旋轉後的包圍盒」算：45 度時旋轉會把高度吃掉一大半，
+        // 只用原始字高算會讓每一列的實際留白愈來愈大（實測會上下各空掉一大塊）。
+        const rad = Math.abs(config.angle) * Math.PI / 180;
+        const cos = Math.cos(rad), sin = Math.sin(rad);
+        const boxW = wmWidth * cos + wmHeight * sin;
+        const boxH = wmWidth * sin + wmHeight * cos;
+        const gapX = boxW + config.size * 0.9;
+        const gapY = boxH + config.size * 1.6;
+        const cols = Math.max(1, Math.floor((width + gapX * 0.3) / gapX));
+        const rows = Math.max(1, Math.floor((height + gapY * 0.3) / gapY));
+        if (cols < 1 || rows < 1) {
+            // 字太大、頁太小：退成單一置中，總比畫不出來好
+            drawMixedText(page, config.text, width / 2, height / 2, config.size, center, fonts.asciiFont,
+                wmColor, { opacity: config.opacity, rotate: fonts.degrees(config.angle), centerX: true });
+            return;
+        }
+        const stepX = width / cols;
+        const stepY = height / rows;
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < cols; col++) {
+                // 棋盤式交錯，避免每一列都對齊看起來像表格
+                const offset = (row % 2) * (stepX / 2);
+                const x = Math.min(width - 4, (col + 0.5) * stepX + offset);
+                const y = (row + 0.5) * stepY;
+                drawMixedText(page, config.text, x, y, config.size, center, fonts.asciiFont,
+                    wmColor, { opacity: config.opacity, rotate: fonts.degrees(config.angle), centerX: true });
+            }
+        }
+    }
+
+    function resetWatermarkSettings() {
+        document.getElementById('watermarkText').value = '機密';
+        document.getElementById('watermarkLayout').value = 'center';
+        document.getElementById('watermarkColor').value = 'red';
+        document.getElementById('watermarkSize').value = 40;
+        document.getElementById('watermarkOpacity').value = 18;
+        document.getElementById('watermarkAngle').value = 45;
+        document.getElementById('watermarkRange').value = '';
+        showNotification('✅ 浮水印設定已重設', 'success');
+    }
+
+    // ------------------------------------------------------
     // 復原／重做
     // ------------------------------------------------------
 
@@ -837,6 +987,14 @@ window.onload = function() {
                 addToc: addTocCheckbox.checked,
                 addBookmarks: !!(document.getElementById('addBookmarksCheckbox') || {}).checked,
                 addPageNumbers: document.getElementById('addPageNumbersCheckbox').checked,
+                addWatermark: !!(document.getElementById('addWatermarkCheckbox') || {}).checked,
+                watermarkText: document.getElementById('watermarkText').value,
+                watermarkLayout: document.getElementById('watermarkLayout').value,
+                watermarkColor: document.getElementById('watermarkColor').value,
+                watermarkSize: document.getElementById('watermarkSize').value,
+                watermarkOpacity: document.getElementById('watermarkOpacity').value,
+                watermarkAngle: document.getElementById('watermarkAngle').value,
+                watermarkRange: document.getElementById('watermarkRange').value,
             },
         };
     }
@@ -928,6 +1086,23 @@ window.onload = function() {
                 tocSettingsPanel.style.display = addTocCheckbox.checked ? 'block' : 'none';
                 const bmBox = document.getElementById('addBookmarksCheckbox');
                 if (bmBox) bmBox.checked = !!payload.tocSettings.addBookmarks;
+                const wmBox = document.getElementById('addWatermarkCheckbox');
+                if (wmBox) {
+                    wmBox.checked = !!payload.tocSettings.addWatermark;
+                    watermarkSettingsPanel.style.display = wmBox.checked ? 'block' : 'none';
+                }
+                const setVal = (id, value) => {
+                    if (value === undefined || value === null) return;
+                    const el = document.getElementById(id);
+                    if (el) el.value = value;
+                };
+                setVal('watermarkText', payload.tocSettings.watermarkText);
+                setVal('watermarkLayout', payload.tocSettings.watermarkLayout);
+                setVal('watermarkColor', payload.tocSettings.watermarkColor);
+                setVal('watermarkSize', payload.tocSettings.watermarkSize);
+                setVal('watermarkOpacity', payload.tocSettings.watermarkOpacity);
+                setVal('watermarkAngle', payload.tocSettings.watermarkAngle);
+                setVal('watermarkRange', payload.tocSettings.watermarkRange);
                 document.getElementById('addPageNumbersCheckbox').checked = !!payload.tocSettings.addPageNumbers;
             }
             setViewMode(viewMode);
@@ -1991,12 +2166,31 @@ window.onload = function() {
         return String(text).replace(/[^\x20-\x7E\u00A0-\u00FF]/g, '?');
     }
 
-    function drawMixedText(page, text, x, y, size, cjkFont, asciiFont, color, cjkFontAvailable = true) {
+    // opts.opacity / opts.rotate 直接轉給 drawText（浮水印用）。
+    // opts.centerX：把 x 當成「中心點」，由呼叫端負責算好總寬再逐段回推。
+    // 預設（不給 opts）行為與原本完全相同，目錄與頁碼不受影響。
+    // 呼叫端注意：沒有中文字型時要傳 cjkFontAvailable:false，中文會被換成 '?'。
+    function drawMixedText(page, text, x, y, size, cjkFont, asciiFont, color, opts = {}) {
+        const { cjkFontAvailable = true, opacity, rotate, centerX = false } = opts;
         const safeText = cjkFontAvailable ? String(text) : sanitizeWinAnsi(text);
+        const runs = splitMixedRuns(safeText);
+        const extra = {};
+        if (typeof opacity === 'number') extra.opacity = opacity;
+        if (rotate) extra.rotate = rotate;
+
         let cx = x;
-        for (const run of splitMixedRuns(safeText)) {
+        if (centerX) {
+            // 先量總寬，再從中心點往左推
+            let total = 0;
+            for (const run of runs) {
+                const font = run.ascii ? asciiFont : cjkFont;
+                try { total += font.widthOfTextAtSize(run.s, size); } catch (e) { /* 量不到就當 0 */ }
+            }
+            cx = x - total / 2;
+        }
+        for (const run of runs) {
             const font = run.ascii ? asciiFont : cjkFont;
-            page.drawText(run.s, { x: cx, y: y, size: size, font: font, color: color });
+            page.drawText(run.s, { x: cx, y: y, size: size, font: font, color: color, ...extra });
             cx += font.widthOfTextAtSize(run.s, size);
         }
         return cx - x; // 回傳總寬度
@@ -2148,8 +2342,9 @@ window.onload = function() {
                 cjkFontAvailable = false;
                 showNotification('警告：無法載入中文字型，目錄中的中文會以「?」呈現。', 'error');
                 try {
-                    customFont = await newPdf.embedFont(StandardFonts.Helvetica);
-                    asciiFont = customFont; // 全部用 Helvetica 時 ASCII 字型相同
+                    // customFont 保持 undefined：要不要用 CJK 字型由 cjkFontAvailable 決定，
+                    // 呼叫端一律傳 cjkFontAvailable ? customFont : asciiFont。
+                    asciiFont = await newPdf.embedFont(StandardFonts.Helvetica);
                 } catch (embedError) {
                     console.error("Failed to embed fallback font:", embedError);
                     showNotification("致命錯誤：無法嵌入預設字型。", 'error');
@@ -2159,6 +2354,10 @@ window.onload = function() {
                 }
             }
             
+            // 沒有中文字型時 cjkFont 就等於 asciiFont，並由 cjkFontAvailable 讓文字先被換成 '?'。
+            // 只判斷一次，避免每個呼叫點各寫一次三元式（漏掉任何一個就會踩到 undefined 字型）。
+            const cjkFont = cjkFontAvailable ? customFont : asciiFont;
+
             const addToc = addTocCheckbox.checked;
             const addPageNumbers = document.getElementById('addPageNumbersCheckbox').checked;
             const addBookmarks = !!(document.getElementById('addBookmarksCheckbox') || {}).checked;
@@ -2292,7 +2491,8 @@ window.onload = function() {
                     tocInsertIndex++;
                     tocPageCount++;
                     drawMixedText(p, tocPageCount === 1 ? '目錄' : '目錄 (續)', 50, 595 - 50,
-                        TOC_CONFIG.MAIN_TITLE_SIZE, customFont, asciiFont, rgb(0, 0, 0));
+                        TOC_CONFIG.MAIN_TITLE_SIZE, cjkFontAvailable ? customFont : asciiFont, asciiFont, rgb(0, 0, 0),
+                        { cjkFontAvailable });
                     return p;
                 };
 
@@ -2312,7 +2512,8 @@ window.onload = function() {
                     if (tocItem.kind === 'divider') {
                         yPosition -= 10;
                         drawMixedText(tocPage, enc(tocItem.title), 50 + indent, yPosition, TOC_CONFIG.SECTION_TITLE_SIZE,
-                            customFont, asciiFont, rgb(0, 0, 0));
+                            cjkFontAvailable ? customFont : asciiFont, asciiFont, rgb(0, 0, 0),
+                            { cjkFontAvailable });
                         yPosition -= 25;
                         continue;
                     }
@@ -2340,7 +2541,8 @@ window.onload = function() {
                     }
 
                     // 繪製標題
-                    drawMixedText(tocPage, truncatedTitle, leftMargin, yPosition, TOC_CONFIG.ITEM_TITLE_SIZE, customFont, asciiFont, rgb(0, 0, 0));
+                    drawMixedText(tocPage, truncatedTitle, leftMargin, yPosition, TOC_CONFIG.ITEM_TITLE_SIZE,
+                        cjkFontAvailable ? customFont : asciiFont, asciiFont, rgb(0, 0, 0), { cjkFontAvailable });
 
                     // 繪製頁碼
                     drawMixedText(tocPage, pageNumStr, tocPage.getWidth() - rightMargin - pageNumWidth, yPosition, TOC_CONFIG.ITEM_PAGENUM_SIZE, customFont, asciiFont, rgb(0, 0, 0));
@@ -2394,6 +2596,30 @@ window.onload = function() {
                         });
                     }
                 });
+            }
+
+            // --- 浮水印／印章 ---
+            // 畫在所有內容與頁碼之後：浮水印要蓋在最上層才不會被後面的繪製蓋掉。
+            // 頁碼範圍以「成品內容頁」為準（不含目錄頁），跟使用者在右側看到的順序一致。
+            const addWatermark = !!(document.getElementById('addWatermarkCheckbox') || {}).checked;
+            if (addWatermark && contentEntries.length > 0) {
+                const wmConfig = readWatermarkConfig();
+                if (wmConfig.enabled) {
+                    progress.textContent = '正在加上浮水印...';
+                    const targets = parsePageRange(document.getElementById('watermarkRange').value, contentEntries.length);
+                    const wmFonts = { centerFont: cjkFont, asciiFont, rgb, degrees };
+                    contentEntries.forEach(({ page }, index) => {
+                        if (!targets.has(index + 1)) return;
+                        try {
+                            // 用 q/Q 包住：透明度等圖形狀態不會外洩到後續繪製
+                            page.pushOperators(PDFLib.pushGraphicsState());
+                            drawWatermarkOnPage(page, wmConfig, wmFonts);
+                            page.pushOperators(PDFLib.popGraphicsState());
+                        } catch (wmError) {
+                            console.error('浮水印繪製失敗：', wmError);
+                        }
+                    });
+                }
             }
 
             // --- 寫入書籤大綱（閱讀器左側的原生導覽）---

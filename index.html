@@ -144,6 +144,84 @@
 
             <div class="option-card">
                 <label>
+                    <input type="checkbox" id="addWatermarkCheckbox">
+                    <span>💧 浮水印／印章</span>
+                </label>
+                <p class="option-hint">在成品頁面上疊字（例如「機密」「副本」），可置中或平鋪。</p>
+
+                <div id="watermarkSettingsPanel" class="toc-settings" style="display: none;">
+                    <div class="toc-settings-title">⚙️ 浮水印設定</div>
+
+                    <div class="toc-settings-grid">
+                        <div class="toc-field toc-field-full">
+                            <label>文字（留空則不蓋）</label>
+                            <div class="toc-input-row">
+                                <input type="text" id="watermarkText" class="toc-input toc-input-wide" value="機密" maxlength="40">
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>樣式</label>
+                            <div class="toc-input-row">
+                                <select id="watermarkLayout" class="toc-input">
+                                    <option value="center">置中（單一）</option>
+                                    <option value="tile">平鋪（佈滿頁面）</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>顏色</label>
+                            <div class="toc-input-row">
+                                <select id="watermarkColor" class="toc-input">
+                                    <option value="red">紅</option>
+                                    <option value="gray">灰</option>
+                                    <option value="blue">藍</option>
+                                    <option value="black">黑</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>字級</label>
+                            <div class="toc-input-row">
+                                <input type="number" id="watermarkSize" class="toc-input" min="8" max="200" value="40">
+                                <span class="toc-unit">pt</span>
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>透明度</label>
+                            <div class="toc-input-row">
+                                <input type="number" id="watermarkOpacity" class="toc-input" min="5" max="100" value="18">
+                                <span class="toc-unit">%</span>
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>旋轉角度</label>
+                            <div class="toc-input-row">
+                                <input type="number" id="watermarkAngle" class="toc-input" min="-90" max="90" value="45">
+                                <span class="toc-unit">度</span>
+                            </div>
+                        </div>
+
+                        <div class="toc-field toc-field-full">
+                            <label>頁面範圍</label>
+                            <div class="toc-input-row">
+                                <input type="text" id="watermarkRange" class="toc-input toc-input-wide" placeholder="全部（例：1-3,5）">
+                            </div>
+                        </div>
+                    </div>
+
+                    <button onclick="resetWatermarkSettings()" class="toc-reset-btn">
+                        🔄 重設為預設值
+                    </button>
+                </div>
+            </div>
+
+            <div class="option-card">
+                <label>
                     <input type="checkbox" id="addTocCheckbox">
                     <span>📑 新增目錄頁</span>
                 </label>

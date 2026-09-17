@@ -702,6 +702,10 @@ input[type="file"] { display: none; }
 }
 .toc-input:hover { background: var(--dark-3); }
 .toc-field .toc-unit { font-size: 11px; color: var(--default-500); }
+/* 浮水印這種需要打字/選取的欄位要寬一點，68px 的數字框不夠用 */
+.toc-field .toc-input-wide { width: 100%; }
+/* 下拉選單的選項文字（例如「置中（單一）」）在 68px 內會被截掉 */
+.toc-field select.toc-input { width: 100%; }
 .toc-field.toc-field-full { grid-column: 1 / -1; }
 
 .toc-reset-btn {
