@@ -53,7 +53,7 @@ function loadUmd(file, globalName) {
     return lib;
 }
 
-const { PDFDocument, StandardFonts, PDFName, rgb } = loadUmd('./pdf-lib.min.js', 'PDFLib');
+const { PDFDocument, StandardFonts, PDFName, PDFString, PDFHexString, rgb } = loadUmd('./pdf-lib.min.js', 'PDFLib');
 
 let chromium;
 try {
@@ -107,9 +107,76 @@ async function makePdf(name, pages, cjk) {
     return file;
 }
 
+// 中文書籤必須用 UTF-16BE + BOM 的 hex 字串（PDFString 走 PDFDocEncoding 會亂碼）
+function textString(s) {
+    if (/^[\x00-\x7F]*$/.test(s)) return PDFString.of(s);
+    const bytes = [0xFE, 0xFF];
+    for (const ch of s) {
+        const cp = ch.codePointAt(0);
+        if (cp < 0x10000) bytes.push(cp >> 8, cp & 0xFF);
+        else {
+            const v = cp - 0x10000;
+            const hi = 0xD800 + (v >> 10), lo = 0xDC00 + (v & 0x3FF);
+            bytes.push(hi >> 8, hi & 0xFF, lo >> 8, lo & 0xFF);
+        }
+    }
+    return PDFHexString.of(bytes.map(b => b.toString(16).padStart(2, '0')).join(''));
+}
+
+// 6 頁 + 兩層中文書籤：第一章(p1) > 1-1 節(p2) > 1-1-1 目(p3)；第二章(p5)
+async function makeOutlinePdf() {
+    const doc = await PDFDocument.create();
+    const pages = [];
+    for (let i = 0; i < 6; i++) {
+        const p = doc.addPage([595, 842]);
+        pages.push(p);
+    }
+    const ctx = doc.context;
+    const refs = { out: ctx.nextRef(), c1: ctx.nextRef(), c1a: ctx.nextRef(), c1a1: ctx.nextRef(), c2: ctx.nextRef() };
+    const item = (ref, title, pageIdx, parent, extra = {}) => ctx.assign(ref, ctx.obj({
+        Title: textString(title), Parent: parent, Dest: [pages[pageIdx].ref, 'Fit'], ...extra,
+    }));
+    item(refs.c1a1, '1-1-1 目', 2, refs.c1a);
+    item(refs.c1a, '1-1 節', 1, refs.c1, { First: refs.c1a1, Last: refs.c1a1, Count: 1 });
+    item(refs.c1, '第一章 總則', 0, refs.out, { First: refs.c1a, Last: refs.c1a, Count: 2, Next: refs.c2 });
+    item(refs.c2, '第二章 罰則', 4, refs.out, { Prev: refs.c1 });
+    ctx.assign(refs.out, ctx.obj({ Type: 'Outlines', First: refs.c1, Last: refs.c2, Count: 4 }));
+    doc.catalog.set(PDFName.of('Outlines'), refs.out);
+    doc.catalog.set(PDFName.of('PageMode'), PDFName.of('UseOutlines'));
+    const dir = await mkdtemp(join(tmpdir(), 'pdfrec-bm-'));
+    const file = join(dir, 'outline.pdf');
+    await writeFile(file, await doc.save());
+    return file;
+}
+
 const fixtureA = await makePdf('A', 3, false);   // Chapter 1..3
 const fixtureB = await makePdf('B', 2, true);    // 第1章、第2章
-console.log(`測試檔：${(await stat(fixtureA)).size}B、${(await stat(fixtureB)).size}B`);
+const fixtureOutline = await makeOutlinePdf();   // 含兩層中文書籤
+
+// 用 pdf.js 讀出 PDF 的大綱（標題 / 階層 / 實際頁碼）
+async function readOutline(targetPage, b64) {
+    return targetPage.evaluate(async (data64) => {
+        const bin = atob(data64); const data = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+        const doc = await window.pdfjsLib.getDocument({ data }).promise;
+        const out = [];
+        const walk = async (items, depth) => {
+            for (const it of items || []) {
+                let pageIndex = null;
+                try {
+                    const d = typeof it.dest === 'string' ? await doc.getDestination(it.dest) : it.dest;
+                    if (d) pageIndex = await doc.getPageIndex(d[0]);
+                } catch (e) { pageIndex = 'ERR:' + e.message; }
+                out.push({ depth, title: it.title, pageIndex });
+                if (it.items) await walk(it.items, depth + 1);
+            }
+        };
+        await walk(await doc.getOutline(), 0);
+        await doc.destroy();
+        return out;
+    }, b64);
+}
 
 const browser = await chromium.launch();
 const page = await browser.newPage();
@@ -462,6 +529,108 @@ check(beforeQs === 1, '智慧勾選前先手動勾了 1 頁（用來驗證取代
 check(qsResult.divs.length > 0 && qsResult.divs.every(k => /_0$|_2$/.test(k)),
     '智慧勾選「奇數頁」會清掉原本勾的偶數頁（取代語意，且只作用在選定檔案）', JSON.stringify(qsResult));
 check(errors5.length === 0, '智慧勾選流程沒有 pageerror', errors5.slice(0, 2).join(' | '));
+
+// ── 13. 書籤組：讀取來源大綱（標題 / 階層 / 頁碼）──
+const page6 = await browser.newPage();
+const errors6 = [];
+page6.on('pageerror', e => errors6.push('PAGEERROR ' + e.message));
+page6.on('console', m => { if (m.type() === 'error') errors6.push('CONSOLE ' + m.text().slice(0, 200)); });
+await page6.goto(BASE + '/index.html', { waitUntil: 'load' });
+
+const SRC_OUTLINE = [
+    { title: '第一章 總則', pageIndex: 0, level: 0 },
+    { title: '1-1 節', pageIndex: 1, level: 1 },
+    { title: '1-1-1 目', pageIndex: 2, level: 2 },
+    { title: '第二章 罰則', pageIndex: 4, level: 0 },
+];
+
+await page6.setInputFiles('#fileInput', [fixtureOutline], { timeout: 20000 });
+await page6.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
+const extracted = await page6.evaluate(() => (typeof getSourceOutline === 'function' ? getSourceOutline() : null));
+check(extracted && extracted.length === SRC_OUTLINE.length, '載入時會抽出來源 PDF 的書籤大綱', JSON.stringify(extracted));
+check(!!extracted && JSON.stringify(extracted) === JSON.stringify(SRC_OUTLINE),
+    '大綱的標題（含中文）、階層、頁碼都正確', JSON.stringify(extracted));
+
+// ── 14. 書籤組：預填目錄 → 生成 → 輸出帶巢狀書籤 ──
+await page6.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
+await page6.click('button:has-text("加入右側")');
+await page6.waitForTimeout(400);
+check(await page6.evaluate(() => document.querySelectorAll('#selectedPages .selected-page-item').length) === 6, '6 頁加入右側');
+
+// 用來源書籤預填目錄（含小節標題與階層）
+await page6.click('button:has-text("編輯目錄")');
+await page6.waitForSelector('#tocModal[open]', { timeout: 5000 });
+check(await page6.evaluate(() => typeof prefillTocFromSource === 'function'), '有「帶入來源書籤」的功能');
+await page6.click('button:has-text("帶入來源書籤")');
+await page6.waitForTimeout(300);
+const prefilled = await page6.inputValue('#tocTextarea');
+check(prefilled.includes('第一章 總則') && prefilled.includes('1-1 節'),
+    '預填會把來源書籤帶進目錄編輯器', JSON.stringify(prefilled.slice(0, 80)));
+check(/^ {2}1-1 節$/m.test(prefilled) && /^ {4}1-1-1 目$/m.test(prefilled),
+    '預填會用縮排表示階層（2 空白 = 下一層）', JSON.stringify(prefilled));
+await page6.click('button:has-text("儲存變更")');
+await page6.waitForTimeout(300);
+// 開啟「寫入書籤」＋「新增目錄頁」後生成
+await page6.evaluate(() => {
+    const toc = document.getElementById('addTocCheckbox'); toc.checked = true; toc.dispatchEvent(new Event('change', { bubbles: true }));
+    const bm = document.getElementById('addBookmarksCheckbox'); bm.checked = true;
+    document.getElementById('addPageNumbersCheckbox').checked = true;
+});
+await page6.click('#generateBtn');
+await page6.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+check(/預覽生成成功/.test(await page6.textContent('#progress')), '含書籤的生成成功', (await page6.textContent('#progress')).trim());
+
+const bmB64 = await page6.evaluate(async () => {
+    const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return btoa(s);
+});
+const bmDoc = await PDFDocument.load(Buffer.from(bmB64, 'base64'));
+const bmTocPages = bmDoc.getPageCount() - 6;
+check(bmTocPages >= 1, `輸出＝目錄 ${bmTocPages} 頁＋內容 6 頁`, `總頁數 ${bmDoc.getPageCount()}`);
+
+const outOutline = await readOutline(page6, bmB64);
+const EXPECT_OUTLINE = [
+    { depth: 0, title: '第一章 總則', pageIndex: 0 },
+    { depth: 1, title: '1-1 節', pageIndex: 1 },
+    { depth: 2, title: '1-1-1 目', pageIndex: 2 },
+    { depth: 0, title: '第二章 罰則', pageIndex: 4 },
+];
+check(outOutline.length === EXPECT_OUTLINE.length, '輸出 PDF 有書籤大綱',
+    JSON.stringify(outOutline.map(o => o.title)));
+check(JSON.stringify(outOutline.map(o => ({ depth: o.depth, title: o.title }))) ===
+      JSON.stringify(EXPECT_OUTLINE.map(o => ({ depth: o.depth, title: o.title }))),
+    '書籤標題（含中文）與階層完全正確', JSON.stringify(outOutline));
+check(JSON.stringify(outOutline.map(o => o.pageIndex)) ===
+      JSON.stringify(EXPECT_OUTLINE.map(o => o.pageIndex + bmTocPages)),
+    '每個書籤都跳轉到正確的成品頁（已加上目錄頁位移）',
+    `實際 ${outOutline.map(o => o.pageIndex).join(',')}，預期 ${EXPECT_OUTLINE.map(o => o.pageIndex + bmTocPages).join(',')}`);
+check(errors6.length === 0, '書籤流程沒有 pageerror／console error', errors6.slice(0, 2).join(' | '));
+
+// ── 15. 只寫書籤、不加目錄頁：仍要有正確的大綱，且頁碼沒有目錄位移 ──
+await page6.evaluate(() => {
+    document.getElementById('previewModal').close(); // 預覽還開著會擋住按鈕
+    const toc = document.getElementById('addTocCheckbox'); toc.checked = false; toc.dispatchEvent(new Event('change', { bubbles: true }));
+});
+await page6.click('#generateBtn');
+await page6.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+const noTocB64 = await page6.evaluate(async () => {
+    const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return btoa(s);
+});
+const noTocDoc = await PDFDocument.load(Buffer.from(noTocB64, 'base64'));
+check(noTocDoc.getPageCount() === 6, '不加目錄頁時輸出剛好 6 頁', `實際 ${noTocDoc.getPageCount()}`);
+const noTocOutline = await readOutline(page6, noTocB64);
+check(JSON.stringify(noTocOutline.map(o => o.pageIndex)) ===
+      JSON.stringify(EXPECT_OUTLINE.map(o => o.pageIndex)),
+    '沒有目錄頁時，書籤直接指向內容頁（無位移）',
+    `實際 ${noTocOutline.map(o => o.pageIndex).join(',')}`);
+check(errors6.length === 0, '只寫書籤的流程沒有 pageerror', errors6.slice(0, 2).join(' | '));
 
 await browser.close();
 server.close();

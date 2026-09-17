@@ -136,6 +136,14 @@
 
             <div class="option-card">
                 <label>
+                    <input type="checkbox" id="addBookmarksCheckbox">
+                    <span>🔖 寫入書籤（閱讀器左側大綱）</span>
+                </label>
+                <p class="option-hint">把右側成品的目錄寫成 PDF 原生書籤，在 Acrobat／瀏覽器裡可以直接跳章節。</p>
+            </div>
+
+            <div class="option-card">
+                <label>
                     <input type="checkbox" id="addTocCheckbox">
                     <span>📑 新增目錄頁</span>
                 </label>
@@ -319,9 +327,11 @@
 
     <dialog class="modal-content" id="tocModal">
         <h3>批次編輯目錄</h3>
-        <p class="modal-hint">請在下方編輯目錄，一行代表一頁。完成後請確保總行數與選擇的頁數相同。</p>
+        <p class="modal-hint">請在下方編輯目錄，一行代表一頁。完成後請確保總行數與選擇的頁數相同。<br>
+        行首<strong>每 2 個空白代表縮一層</strong>（同時決定目錄頁縮排與書籤階層）。</p>
         <textarea id="tocTextarea"></textarea>
         <div class="modal-actions">
+            <button class="btn btn-aux" id="prefillTocBtn" onclick="prefillTocFromSource()">🔖 帶入來源書籤</button>
             <button class="btn" onclick="closeTocEditor()">取消</button>
             <button class="btn btn-primary" onclick="saveToc()">儲存變更</button>
         </div>

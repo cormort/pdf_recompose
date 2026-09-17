@@ -663,6 +663,14 @@ input[type="file"] { display: none; }
 }
 .option-card input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; flex-shrink: 0; }
 
+/* 選項卡底下的補充說明 */
+.option-hint {
+    margin-top: 8px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--default-400);
+}
+
 .toc-settings {
     margin-top: 12px;
     padding: 12px;
@@ -759,7 +767,9 @@ dialog.modal-content::backdrop { background: rgba(0,0,0,.5); backdrop-filter: bl
     font-family: inherit;
 }
 
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; align-items: center; }
+/* 主要動作靠右，輔助動作（如帶入來源書籤）靠左 */
+.modal-actions .btn-aux { margin-right: auto; }
 /* 取消鈕：HeroUI flat default（中性色；紅色容易讓人以為是破壞性操作） */
 .modal-actions .btn:not(.btn-primary):not(.btn-success):not(.btn-danger) {
     background: var(--default-100);

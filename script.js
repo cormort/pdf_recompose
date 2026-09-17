@@ -45,6 +45,10 @@ window.onload = function() {
     let sourceObserver = null;            // IntersectionObserver
     let sourceRenderToken = 0;            // 每次重繪 +1，用來讓舊的 observer 失效
 
+    // 來源 PDF 的書籤大綱：檔名 -> { pageIndex: {title, level} }
+    // 載入時就抽出來（pdf.js 文件之後會 destroy），用來預填目錄與寫入成品書籤。
+    let sourceOutlines = new Map();
+
     // PDF 預覽相關
     let finalPdfBytes = null;
     let currentPreviewUrl = null;
@@ -127,12 +131,30 @@ window.onload = function() {
     window.openTocEditor = openTocEditor;
     window.closeTocEditor = closeTocEditor;
     window.saveToc = saveToc;
+    window.prefillTocFromSource = prefillTocFromSource;
     window.resetTocSettings = resetTocSettings;
 
     // PDF 生成與預覽
     window.generatePDF = generatePDF;
     window.downloadGeneratedPDF = downloadGeneratedPDF;
     window.closePreview = closePreview;
+
+    // ------------------------------------------------------
+    // 4b. 唯讀檢視 API（給自動化驗證用）
+    // 說明：狀態都在這個閉包裡，外部只能透過 UI 操作；驗證需要斷言內部資料時
+    // 用這組唯讀快照，回傳複本，改不動內部狀態。
+    // ------------------------------------------------------
+    window.getSourceOutline = () => {
+        for (const file of pdfFiles) {
+            if (file && file.outline && file.outline.length > 0) {
+                return file.outline.map(e => ({ title: e.title, pageIndex: e.pageIndex, level: e.level }));
+            }
+        }
+        return null;
+    };
+    window.getTocSnapshot = () => selectedPages
+        .filter(p => p && p.type !== 'divider')
+        .map(p => ({ title: p.firstLine || null, level: p.level || 0, pageNum: p.pageNum }));
 
     // ------------------------------------------------------
     // 5. 事件監聽器綁定 (Event Listeners)
@@ -192,7 +214,7 @@ window.onload = function() {
         finalPdfBytes = null;
     });
 
-    // 目錄設定面板切換
+    // 目錄設定面板切換（目錄頁才需要字型設定；純書籤不需要）
     addTocCheckbox.addEventListener('change', function() {
         tocSettingsPanel.style.display = this.checked ? 'block' : 'none';
     });
@@ -496,7 +518,17 @@ window.onload = function() {
                 for (let w = 0; w < CONCURRENCY; w++) workers.push(renderPageWorker());
                 await Promise.all(workers);
 
+                // 縮圖已產生，趁文件還活著把書籤大綱抽出來（等等就要 destroy）
+                fileData.outline = await extractOutline(pdf);
+                const outlineLookup = buildOutlineLookup(fileData.outline);
+                fileData.pages.forEach((page, pageIndex) => {
+                    const hit = outlineLookup.get(pageIndex);
+                    page.sourceTitle = hit ? hit.title : null;
+                    page.sourceLevel = hit ? hit.level : 0;
+                });
+
                 await pdf.destroy(); // 縮圖已產生，釋放 pdf.js worker 記憶體；生成時會用 file 重新讀取
+                if (fileData.outline.length > 0) sourceOutlines.set(fileData.name, outlineLookup);
                 pdfFiles.push(fileData);
                 loadedCount++;
             } catch (error) {
@@ -534,6 +566,60 @@ window.onload = function() {
             const queued = pendingFileQueue.splice(0, pendingFileQueue.length);
             handleFiles(queued);
         }
+    }
+
+    // ------------------------------------------------------
+    // 書籤大綱（Outlines）
+    // ------------------------------------------------------
+
+    // 把書籤的目的地解析成頁碼索引。dest 可能是名稱字串或陣列，
+    // 用文件自己的解析器處理才不會漏掉 /Names、/Dests 這些間接指向。
+    async function resolveOutlinePageIndex(pdf, dest) {
+        if (dest === undefined || dest === null) return null;
+        try {
+            const resolved = typeof dest === 'string' ? await pdf.getDestination(dest) : dest;
+            if (!Array.isArray(resolved) || resolved.length === 0) return null;
+            const index = await pdf.getPageIndex(resolved[0]);
+            return Number.isInteger(index) ? index : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // 讀出整份文件的書籤，攤平成 [{title, pageIndex, level}]（依文件順序，level 從 0 起算）。
+    // 沒有書籤、或讀取失敗都回傳空陣列，不能讓它影響檔案載入。
+    async function extractOutline(pdf) {
+        try {
+            const raw = await pdf.getOutline();
+            if (!Array.isArray(raw) || raw.length === 0) return [];
+            const flat = [];
+            const walk = async (items, level) => {
+                for (const item of items || []) {
+                    const title = (item && item.title ? String(item.title) : '').trim();
+                    const pageIndex = await resolveOutlinePageIndex(pdf, item && item.dest);
+                    // 對不到頁的書籤先略過：等於用不到的錨點，留著只會讓後續對位更亂
+                    if (title && pageIndex !== null) flat.push({ title, pageIndex, level });
+                    if (item && item.items) await walk(item.items, level + 1);
+                }
+            };
+            await walk(raw, 0);
+            return flat;
+        } catch (error) {
+            console.error('讀取書籤大綱失敗（不影響載入）：', error);
+            return [];
+        }
+    }
+
+    // 檔名 -> { 頁碼索引 -> {title, level} }，供預填目錄使用
+    function buildOutlineLookup(flat) {
+        const byPage = new Map();
+        for (const entry of flat) byPage.set(entry.pageIndex, { title: entry.title, level: entry.level });
+        return byPage;
+    }
+
+    function getOutlineInfoForPage(fileName, pageIndex) {
+        const byPage = sourceOutlines.get(fileName);
+        return (byPage && byPage.get(pageIndex)) || null;
     }
 
     // 抽取頁面全文（座標、字級）與標題，一次 getTextContent 完成。
@@ -659,6 +745,7 @@ window.onload = function() {
         if (usedByTarget && !(await askConfirm(`「${file ? file.name : '此檔案'}」有頁面在右側成品中，移除後會一併從成品刪除。確定移除嗎？`))) {
             return;
         }
+        if (file) sourceOutlines.delete(file.name);
         pdfFiles.splice(index, 1);
         selectedPages = selectedPages.filter(p => p.fileIndex !== index).map(p => {
             if (p.fileIndex > index) p.fileIndex--;
@@ -686,6 +773,7 @@ window.onload = function() {
         }
         pdfFiles = [];
         selectedPages = [];
+        sourceOutlines.clear();
         lastSourceClickGlobalIndex = null;
         clearFilesConfirmMode = false;
         fileInput.value = '';
@@ -912,6 +1000,9 @@ window.onload = function() {
                         fileName: file.name, 
                         thumb: page.thumb, 
                         firstLine: page.firstLine,
+                        // 來源書籤（若該頁有被書籤指到）：預填目錄與寫入成品書籤都用得到
+                        sourceTitle: page.sourceTitle || null,
+                        level: page.sourceLevel || 0,
                         rotation: page.sourceRotation || 0 
                     });
                     addedCount++;
@@ -1358,13 +1449,22 @@ window.onload = function() {
     // === 邏輯區塊：目錄編輯 (TOC Editor)
     // ======================================================
 
+    // 縮排 ↔ 階層：行首每 2 個空白算一層（上限 5 層，避免誤貼大段空白爆掉）
+    function levelFromIndent(line) {
+        const match = line.match(/^[ \t]*/);
+        const indent = match ? match[0].replace(/\t/g, '  ').length : 0;
+        return Math.min(5, Math.floor(indent / 2));
+    }
+
     function openTocEditor() {
         const pageItems = selectedPages.filter(p => p && p.type !== 'divider');
         if (pageItems.length === 0) {
             showNotification('請先選擇至少一個頁面才能編輯目錄。', 'info');
             return;
         }
-        const titles = pageItems.map(p => p.firstLine || `Page ${p.pageNum || '?'}`).join('\n');
+        const titles = pageItems
+            .map(p => '  '.repeat(p.level || 0) + (p.firstLine || `Page ${p.pageNum || '?'}`))
+            .join('\n');
         tocTextarea.value = titles;
         tocModal.showModal();
     }
@@ -1373,17 +1473,45 @@ window.onload = function() {
         tocModal.close();
     }
 
-    function saveToc() {
-        const newTitles = tocTextarea.value.split('\n');
+    // 用來源 PDF 的書籤大綱預填目錄：這是「不用一行一行手打」的關鍵。
+    // 以每頁的原始頁碼去對照來源書籤（書籤是標在頁上的，跟加入順序無關）。
+    function prefillTocFromSource() {
         const pageItems = selectedPages.filter(p => p && p.type !== 'divider');
-        if (newTitles.length !== pageItems.length) {
-            showNotification(`錯誤：目錄行數 (${newTitles.length}) 與選擇的頁數 (${pageItems.length}) 不符。`, 'error');
+        if (pageItems.length === 0) {
+            showNotification('請先選擇至少一個頁面。', 'info');
+            return;
+        }
+        let hitCount = 0;
+        const lines = pageItems.map(item => {
+            const file = pdfFiles[item.fileIndex];
+            const info = getOutlineInfoForPage(file && file.name, item.pageNum - 1);
+            if (info) hitCount++;
+            // 有來源書籤就用它（含階層），沒有的頁面沿用目前的標題、不縮排
+            if (info) return '  '.repeat(info.level) + info.title;
+            return item.firstLine || `Page ${item.pageNum || '?'}`;
+        });
+        tocTextarea.value = lines.join('\n');
+        if (hitCount === 0) {
+            showNotification('來源 PDF 沒有書籤，已保留目前的標題。', 'info');
+        } else {
+            showNotification(`✅ 已帶入 ${hitCount}/${pageItems.length} 頁的來源書籤`, 'success');
+        }
+    }
+
+    function saveToc() {
+        const rawLines = tocTextarea.value.split('\n');
+        const pageItems = selectedPages.filter(p => p && p.type !== 'divider');
+        if (rawLines.length !== pageItems.length) {
+            showNotification(`錯誤：目錄行數 (${rawLines.length}) 與選擇的頁數 (${pageItems.length}) 不符。`, 'error');
             return;
         }
         let titleIndex = 0;
         selectedPages.forEach(item => {
             if (item && item.type !== 'divider') {
-                item.firstLine = newTitles[titleIndex] || `Page ${item.pageNum || '?'}`;
+                const line = rawLines[titleIndex];
+                const title = line.replace(/^[ \t]+/, '').trim();
+                item.firstLine = title || `Page ${item.pageNum || '?'}`;
+                item.level = levelFromIndent(line);
                 titleIndex++;
             }
         });
@@ -1490,6 +1618,103 @@ window.onload = function() {
         return cx - x; // 回傳總寬度
     }
 
+    // ------------------------------------------------------
+    // 把目錄寫成 PDF 書籤大綱（閱讀器左側的原生導覽）
+    // ------------------------------------------------------
+
+    // 中文書籤必須用 UTF-16BE + BOM 的 hex 字串：PDFString 走的是 PDFDocEncoding，
+    // 直接塞中文會在閱讀器裡變成亂碼（實測會得到 ", à" 這種字）。
+    function pdfTextString(text, PDFString, PDFHexString) {
+        const str = String(text == null ? '' : text);
+        if (/^[\x00-\x7F]*$/.test(str)) return PDFString.of(str);
+        const bytes = [0xFE, 0xFF];
+        for (const ch of str) {
+            const cp = ch.codePointAt(0);
+            if (cp < 0x10000) {
+                bytes.push(cp >> 8, cp & 0xFF);
+            } else {
+                const v = cp - 0x10000;
+                const hi = 0xD800 + (v >> 10), lo = 0xDC00 + (v & 0x3FF);
+                bytes.push(hi >> 8, hi & 0xFF, lo >> 8, lo & 0xFF);
+            }
+        }
+        return PDFHexString.of(bytes.map(b => b.toString(16).padStart(2, '0')).join(''));
+    }
+
+    // 把 [{title, level, page}] 攤平清單組成樹狀大綱節點。
+    // 先配置 PDFRef 再互相連結：pdf-lib 的 context.obj() 遇到 PDFRef 會保留參考，
+    // 但直接放未註冊的物件會被深拷貝，Next/Prev 的循環參考就會斷掉。
+    function buildOutlineTree(doc, entries, PDFString, PDFHexString) {
+        const ctx = doc.context;
+        // 傳進來的 level 是「目錄頁的縮排層級」，最淺的一項不一定是 0
+        // （有小節標題時，內容頁是從 1 起算）。書籤樹必須以最淺的那一項當第 0 層，
+        // 否則每一項都會因為「找不到 level-1 的父節點」而全部變成頂層。
+        const minLevel = entries.reduce((min, entry, index) => (index === 0 ? (entry.level || 0) : Math.min(min, entry.level || 0)), 0);
+        const items = entries.map((entry, index) => {
+            const normalized = (entry.level || 0) - minLevel;
+            const prev = index > 0 ? (entries[index - 1].level || 0) - minLevel : 0;
+            return {
+                title: entry.title,
+                // 超過上一層深度就往下掉一層就好，避免出現跳級的空層
+                level: Math.max(0, Math.min(normalized, index === 0 ? 0 : prev + 1)),
+                dest: entry.page,
+                ref: ctx.nextRef(),
+                childIndexes: [],
+            };
+        });
+
+        // 用堆疊把節點掛到正確的父層：stack 的最後一個是「目前的父節點」。
+        // 只回到 stack[level-1] 上面，所以不會產生空的父層；level 0 就是頂層。
+        const roots = [];
+        const stack = []; // stack[i] = 第 i 層目前開啟的節點
+        items.forEach((item) => {
+            stack.length = Math.min(stack.length, item.level);
+            if (item.level > 0 && stack.length === item.level) {
+                stack[item.level - 1].childIndexes.push(item);
+            } else {
+                roots.push(item);
+            }
+            stack[item.level] = item;
+        });
+
+        const outlineRef = ctx.nextRef();
+        const descendants = (item) => item.childIndexes.reduce((n, c) => n + 1 + descendants(c), 0);
+
+        const write = (item, parentRef, prevRef, nextRef) => {
+            const dict = {
+                Title: pdfTextString(item.title, PDFString, PDFHexString),
+                Parent: parentRef,
+                // 目標頁在成品裡可能被旋轉，用 'Fit' 讓閱讀器自己算，最可預期
+                Dest: [item.dest.ref, 'Fit'],
+            };
+            if (prevRef) dict.Prev = prevRef;
+            if (nextRef) dict.Next = nextRef;
+            if (item.childIndexes.length > 0) {
+                dict.First = item.childIndexes[0].ref;
+                dict.Last = item.childIndexes[item.childIndexes.length - 1].ref;
+                dict.Count = descendants(item);
+            }
+            ctx.assign(item.ref, ctx.obj(dict));
+        };
+
+        const linkList = (siblings, parentRef) => {
+            siblings.forEach((item, index) => {
+                write(item, parentRef, siblings[index - 1] ? siblings[index - 1].ref : null,
+                    siblings[index + 1] ? siblings[index + 1].ref : null);
+                if (item.childIndexes.length > 0) linkList(item.childIndexes, item.ref);
+            });
+        };
+        linkList(roots, outlineRef);
+
+        ctx.assign(outlineRef, ctx.obj({
+            Type: 'Outlines',
+            First: roots[0].ref,
+            Last: roots[roots.length - 1].ref,
+            Count: roots.reduce((n, r) => n + 1 + descendants(r), 0),
+        }));
+        return outlineRef;
+    }
+
     async function generatePDF() {
         if (typeof PDFLib === 'undefined' || typeof PDFLib.PDFDocument === 'undefined') {
             console.error("PDFLib not available in generatePDF");
@@ -1552,6 +1777,7 @@ window.onload = function() {
             
             const addToc = addTocCheckbox.checked;
             const addPageNumbers = document.getElementById('addPageNumbersCheckbox').checked;
+            const addBookmarks = !!(document.getElementById('addBookmarksCheckbox') || {}).checked;
 
             // --- 合併內容頁 ---
             // 先合併、再畫目錄：目錄的頁碼與超連結必須對應「真的進了輸出」的內容頁。
@@ -1611,6 +1837,35 @@ window.onload = function() {
                 }
             }
 
+            // --- 大綱項目（目錄頁與書籤共用同一份）---
+            // 只列「有被當成標題的頁」與小節標題。若每一頁都列，200 頁的文件會得到
+            // 200 個書籤——那是一份清單，不是目錄。
+            const outlineEntries = [];
+            {
+                let contentIdx = 0;
+                for (const item of selectedPages) {
+                    if (!item) continue;
+                    if (item.type === 'divider') {
+                        outlineEntries.push({ kind: 'divider', title: item.firstLine || 'New Section', level: 0, contentIndex: -1 });
+                    } else if (contentIdx < contentEntries.length) {
+                        const contentItem = contentEntries[contentIdx].item;
+                        const autoTitle = `Page ${contentItem.pageNum || '?'}`;
+                        const title = contentItem.firstLine || autoTitle;
+                        // 有自訂標題（來自目錄編輯或來源書籤）才算一個大綱節點
+                        if (title && title !== autoTitle) {
+                            outlineEntries.push({
+                                kind: 'page',
+                                title,
+                                level: 1 + (contentItem.level || 0),
+                                contentIndex: contentIdx,
+                            });
+                        }
+                        contentIdx++;
+                    }
+                }
+                while (outlineEntries.length > 0 && outlineEntries[outlineEntries.length - 1].kind === 'divider') outlineEntries.pop();
+            }
+
             // --- 建立目錄頁 (TOC) ---
             const tocLinkData = [];
             let tocPageCount = 0;
@@ -1634,22 +1889,7 @@ window.onload = function() {
                     LINE_HEIGHT: readSize('tocLineHeight', TOC_LINE_HEIGHT_DEFAULT)
                 };
 
-                // 目錄項目＝大綱（只取有對應內容頁的小節）與成功合併的內容頁交錯排列
-                const tocItems = [];
-                {
-                    let contentIdx = 0;
-                    for (const item of selectedPages) {
-                        if (!item) continue;
-                        if (item.type === 'divider') {
-                            // 後面沒有成功合併的內容頁時，這個小節標題不該出現在目錄上
-                            tocItems.push({ type: 'divider', title: item.firstLine || 'New Section' });
-                        } else if (contentIdx < contentEntries.length) {
-                            tocItems.push({ type: 'page', entryIndex: contentIdx });
-                            contentIdx++;
-                        }
-                    }
-                    while (tocItems.length > 0 && tocItems[tocItems.length - 1].type === 'divider') tocItems.pop();
-                }
+                const tocItems = outlineEntries;
 
                 // 先模擬排版計算目錄總頁數，否則跨頁目錄的頁碼會少算
                 let simY = 595 - 90;
@@ -1682,19 +1922,21 @@ window.onload = function() {
                         yPosition = 595 - 90;
                     }
 
-                    if (tocItem.type === 'divider') {
+                    // 目錄頁的縮排：每層 14pt，最多縮到剩 120pt 的標題空間
+                    const indent = Math.min((tocItem.level || 0) * 14, 120);
+
+                    if (tocItem.kind === 'divider') {
                         yPosition -= 10;
-                        drawMixedText(tocPage, enc(tocItem.title), 50, yPosition, TOC_CONFIG.SECTION_TITLE_SIZE,
+                        drawMixedText(tocPage, enc(tocItem.title), 50 + indent, yPosition, TOC_CONFIG.SECTION_TITLE_SIZE,
                             customFont, asciiFont, rgb(0, 0, 0));
                         yPosition -= 25;
                         continue;
                     }
 
-                    const { item } = contentEntries[tocItem.entryIndex];
-                    const title = enc(item.firstLine || `Page ${item.pageNum || '?'}`);
-                    const pageNumStr = `${tocItem.entryIndex + 1 + totalTocPages}`;
+                    const title = enc(tocItem.title);
+                    const pageNumStr = `${tocItem.contentIndex + 1 + totalTocPages}`;
 
-                    const leftMargin = 70;
+                    const leftMargin = 70 + indent;
                     const rightMargin = 50;
                     const pageContentWidth = tocPage.getWidth() - leftMargin - rightMargin;
 
@@ -1741,7 +1983,7 @@ window.onload = function() {
                     // 儲存連結資訊
                     tocLinkData.push({
                         tocPage: tocPage,
-                        targetContentPageIndex: tocItem.entryIndex,
+                        targetContentPageIndex: tocItem.contentIndex,
                         linkRect: {
                             x: leftMargin - 5,
                             y: yPosition - 2,
@@ -1768,6 +2010,41 @@ window.onload = function() {
                         });
                     }
                 });
+            }
+
+            // --- 寫入書籤大綱（閱讀器左側的原生導覽）---
+            // 來源：目前右側成品的實際順序與最終標題（含目錄編輯器的修改）。
+            if (addBookmarks && contentEntries.length > 0) {
+                progress.textContent = '正在寫入書籤大綱...';
+                try {
+                    const bookmarkEntries = [];
+
+                    // 與目錄頁共用同一份 outlineEntries：標題與階層都取自目錄的最終結果
+                    // （包含在目錄編輯器裡改過的標題），兩者永遠一致。
+                    for (const entry of outlineEntries) {
+                        bookmarkEntries.push({
+                            title: entry.title,
+                            level: entry.level || 0,
+                            page: entry.contentIndex >= 0 ? contentEntries[entry.contentIndex].page : null,
+                        });
+                    }
+
+                    // 沒有目標頁的項目不能當書籤（跳不過去）；小節標題若底下沒有
+                    // 可用項目，留著只會變成點不動的空節點，所以一併移除。
+                    const usable = bookmarkEntries.filter((entry, index) => {
+                        if (entry.page) return true;
+                        return bookmarkEntries.slice(index + 1).some(next => next.page);
+                    });
+                    if (usable.length > 0) {
+                        const { PDFString, PDFHexString } = PDFLib;
+                        const outlineRef = buildOutlineTree(newPdf, usable, PDFString, PDFHexString);
+                        newPdf.catalog.set(PDFName.of('Outlines'), outlineRef);
+                        newPdf.catalog.set(PDFName.of('PageMode'), PDFName.of('UseOutlines'));
+                    }
+                } catch (outlineError) {
+                    console.error('寫入書籤大綱失敗：', outlineError);
+                    showNotification('⚠️ 書籤大綱寫入失敗，其餘內容仍會正常輸出。', 'error');
+                }
             }
 
             // --- 建立目錄超連結 ---
