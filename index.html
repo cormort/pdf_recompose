@@ -316,6 +316,79 @@
 
             <div class="option-card">
                 <label>
+                    <input type="checkbox" id="enableImpositionCheckbox">
+                    <span>🖨️ 一頁多張／騎馬釘</span>
+                </label>
+                <p class="option-hint">列印用拼版：把多頁併到一張紙上。騎馬釘會自動重排頁序，對折後頁碼連續。</p>
+
+                <div id="impositionSettingsPanel" class="toc-settings" style="display: none;">
+                    <div class="toc-settings-title">⚙️ 拼版設定</div>
+
+                    <div class="toc-settings-grid">
+                        <div class="toc-field">
+                            <label>每張頁數</label>
+                            <div class="toc-input-row">
+                                <select id="impositionNUpSelect" class="toc-input">
+                                    <option value="1">1（不拼版）</option>
+                                    <option value="2">2（2-up）</option>
+                                    <option value="4">4（4-up）</option>
+                                    <option value="6">6（6-up）</option>
+                                    <option value="9">9（9-up）</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>紙張尺寸</label>
+                            <div class="toc-input-row">
+                                <select id="impositionSheetSizeSelect" class="toc-input">
+                                    <option value="original">沿用頁面尺寸</option>
+                                    <option value="a4">A4</option>
+                                    <option value="a5">A5</option>
+                                    <option value="letter">Letter</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="toc-field toc-field-full">
+                            <label>排列方向</label>
+                            <div class="toc-input-row">
+                                <select id="impositionOrderSelect" class="toc-input">
+                                    <option value="row">先左而右，再換列</option>
+                                    <option value="column">先上而下，再換欄</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="toc-field toc-field-full">
+                            <label>騎馬釘</label>
+                            <div class="toc-input-row">
+                                <label class="toc-inline-check">
+                                    <input type="checkbox" id="impositionSaddleCheckbox">
+                                    <span>依對折順序重排（頁數自動補成 4 的倍數）</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>格線</label>
+                            <div class="toc-input-row">
+                                <label class="toc-inline-check">
+                                    <input type="checkbox" id="impositionBorderCheckbox">
+                                    <span>畫格線</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button onclick="resetImpositionSettings()" class="toc-reset-btn">
+                        🔄 重設為預設值
+                    </button>
+                </div>
+            </div>
+
+            <div class="option-card">
+                <label>
                     <input type="checkbox" id="enableLayoutCheckbox">
                     <span>📐 版面調整（裁白邊／統一尺寸）</span>
                 </label>

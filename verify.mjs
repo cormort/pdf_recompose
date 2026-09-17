@@ -163,10 +163,57 @@ async function makeInsetPdf() {
     return file;
 }
 
+// 每頁只有一個大代號（P1、P2...），用來驗證拼版時「哪一頁被放到哪一格」
+async function makeMarkedPdf(count) {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    for (let i = 0; i < count; i++) {
+        const p = doc.addPage([595, 842]);
+        p.drawText(`P${i + 1}`, { x: 260, y: 400, size: 48, font });
+    }
+    const dir = await mkdtemp(join(tmpdir(), 'pdfrec-mark-'));
+    const file = join(dir, `marked${count}.pdf`);
+    await writeFile(file, await doc.save());
+    return file;
+}
+
+// 把一頁的文字依「格線」分類：回傳每一格裡的文字
+async function readCellsByGrid(targetPage, b64, cols, rows) {
+    return targetPage.evaluate(async ({ data64, cols, rows }) => {
+        const bin = atob(data64); const data = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+        const doc = await window.pdfjsLib.getDocument({ data }).promise;
+        const pages = [];
+        for (let i = 1; i <= doc.numPages; i++) {
+            const page = await doc.getPage(i);
+            const vp = page.getViewport({ scale: 1 });
+            const tc = await page.getTextContent();
+            const cells = Array.from({ length: cols * rows }, () => []);
+            for (const it of tc.items) {
+                if (!it.str || !it.str.trim()) continue;
+                // transform[4]/[5] 是基線位置；y 要用「距頁頂」計算才與格線一致
+                const x = it.transform[4];
+                const yFromTop = vp.height - it.transform[5];
+                let col = Math.floor((x / vp.width) * cols);
+                let row = Math.floor((yFromTop / vp.height) * rows);
+                col = Math.max(0, Math.min(cols - 1, col));
+                row = Math.max(0, Math.min(rows - 1, row));
+                cells[row * cols + col].push(it.str.trim());
+            }
+            pages.push({ size: [Math.round(vp.width), Math.round(vp.height)], cells });
+        }
+        await doc.destroy();
+        return pages;
+    }, { data64: b64, cols, rows });
+}
+
 const fixtureA = await makePdf('A', 3, false);   // Chapter 1..3
 const fixtureB = await makePdf('B', 2, true);    // 第1章、第2章
 const fixtureOutline = await makeOutlinePdf();   // 含兩層中文書籤
 const fixtureInset = await makeInsetPdf();       // 內容置中、四周大量白邊
+const fixtureMark4 = await makeMarkedPdf(4);     // P1..P4（測試騎馬釘）
+const fixtureMark6 = await makeMarkedPdf(6);     // P1..P6（測試 2-up / 4-up）
 
 // 用 pdf.js 逐頁讀出文字 items（浮水印需要確認文字真的進到輸出、而且能被抽取）
 async function readPageTexts(targetPage, b64) {
@@ -1126,8 +1173,12 @@ await page10.waitForTimeout(400);
 
 await page10.setInputFiles('#fileInput', [fixtureInset], { timeout: 20000 });
 await page10.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
-await page10.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
-await page10.click('button:has-text("加入右側")');
+await page10.evaluate(() => {
+    document.querySelectorAll('dialog[open]').forEach(d => { if (d.id !== 'previewModal') d.close(); });
+    const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb);
+    // 直接觸發 onclick：這一段在驗證版面邏輯，不需要經過真實指標事件
+    batchAddToTarget();
+});
 await page10.waitForTimeout(300);
 check(await page10.evaluate(() => document.querySelectorAll('#selectedPages .selected-page-item').length) === 2, '版面測試：2 頁就緒');
 check(await page10.evaluate(() => document.getElementById('layoutSettingsPanel').style.display === 'none'),
@@ -1140,19 +1191,59 @@ check(await page10.evaluate(() => document.getElementById('layoutSettingsPanel')
     '勾選版面調整後展開設定面板');
 
 // 預設：維持原尺寸
+// 關掉任何開啟的對話框（例如啟動時「要還原工作階段嗎？」會擋住後續點擊）
+const dismissDialogs = async (target) => {
+    await target.evaluate(() => {
+        document.querySelectorAll('dialog[open]').forEach(d => {
+            if (d.id === 'previewModal') return;
+            d.close();
+        });
+    });
+    await target.waitForTimeout(80);
+};
+
+// 清空右側成品：開目錄編輯器 → 存成空 → 關閉。
+// saveToc 是同步的，所以這樣比連續呼叫 clearSelectedPages（有確認機制）可靠。
+// 清空右側成品。不能用 saveToc（它會驗證行數＝頁數，不符就直接拒絕），
+// 改用 removeSelectedPage 逐一移除（同步）。
+const clearTarget = async (target) => {
+    await target.evaluate(() => {
+        let guard = 0;
+        while (document.querySelectorAll('#selectedPages > *').length > 0 && guard++ < 200) {
+            removeSelectedPage(0);
+        }
+        const m = document.getElementById('tocModal');
+        if (m.open) m.close();
+        return true;
+    });
+    await target.waitForTimeout(120);
+};
+
+// 清空來源：removeFile 是 async，直接 return 會讓 Playwright 一直等那個 promise。
+// 用「表達式」呼叫並回傳 true，evaluate 就會立刻結束。
+const clearSource = async (target) => {
+    await target.evaluate(() => {
+        let guard = 0;
+        while (document.querySelectorAll('#fileList li').length > 0 && guard++ < 50) {
+            removeFile(0);
+        }
+        return true;
+    });
+    await target.waitForTimeout(150);
+};
+
 // 每次情境都先清空來源檔案：輸出不會累積，頁數與頁序都可預期
 const resetAll = async () => {
     await page10.evaluate(() => {
         const m = document.getElementById('previewModal');
         if (m.open) m.close();
-        // 兩個清空動作都有「再次點擊確認」的機制，要各呼叫兩次才會真的清掉。
-        // 只清來源檔案不夠：右側成品是獨立的狀態，沒清掉的話下一次生成會把舊頁面一起帶進去。
-        clearAllFiles();
-        clearAllFiles();
-        clearSelectedPages();
-        clearSelectedPages();
     });
-    await page10.waitForTimeout(200);
+    await page10.evaluate(() => {
+        document.querySelectorAll('dialog[open]').forEach(d => { if (d.id !== 'previewModal') d.close(); });
+    });
+    await dismissDialogs(page10);
+    await clearTarget(page10);
+    await clearSource(page10);
 };
 const genAndRead = async (label) => {
     await page10.evaluate(() => { const m = document.getElementById('previewModal'); if (m.open) m.close(); });
@@ -1179,8 +1270,12 @@ const genAndRead = async (label) => {
 await resetAll();
 await page10.setInputFiles('#fileInput', [fixtureInset], { timeout: 20000 });
 await page10.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
-await page10.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
-await page10.click('button:has-text("加入右側")');
+await page10.evaluate(() => {
+    document.querySelectorAll('dialog[open]').forEach(d => { if (d.id !== 'previewModal') d.close(); });
+    const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb);
+    // 直接觸發 onclick：這一段在驗證版面邏輯，不需要經過真實指標事件
+    batchAddToTarget();
+});
 await page10.waitForTimeout(300);
 const keep = await genAndRead('原尺寸');
 check(keep.ok && JSON.stringify(keep.sizes) === JSON.stringify([[595, 842], [595, 842]]),
@@ -1190,8 +1285,12 @@ check(keep.ok && JSON.stringify(keep.sizes) === JSON.stringify([[595, 842], [595
 await resetAll();
 await page10.setInputFiles('#fileInput', [fixtureInset], { timeout: 20000 });
 await page10.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
-await page10.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
-await page10.click('button:has-text("加入右側")');
+await page10.evaluate(() => {
+    document.querySelectorAll('dialog[open]').forEach(d => { if (d.id !== 'previewModal') d.close(); });
+    const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb);
+    // 直接觸發 onclick：這一段在驗證版面邏輯，不需要經過真實指標事件
+    batchAddToTarget();
+});
 await page10.waitForTimeout(300);
 await page10.evaluate(() => {
     document.getElementById('layoutFitSelect').value = 'content';
@@ -1212,8 +1311,12 @@ check(cropped.sizes && Math.abs(cropped.sizes[0][0] - cropped.sizes[1][0]) <= 6 
 await resetAll();
 await page10.setInputFiles('#fileInput', [fixtureInset], { timeout: 20000 });
 await page10.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
-await page10.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
-await page10.click('button:has-text("加入右側")');
+await page10.evaluate(() => {
+    document.querySelectorAll('dialog[open]').forEach(d => { if (d.id !== 'previewModal') d.close(); });
+    const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb);
+    // 直接觸發 onclick：這一段在驗證版面邏輯，不需要經過真實指標事件
+    batchAddToTarget();
+});
 await page10.waitForTimeout(300);
 await page10.evaluate(() => {
     document.getElementById('layoutFitSelect').value = 'original';
@@ -1227,8 +1330,12 @@ check(uniform.ok && JSON.stringify(uniform.sizes) === JSON.stringify([[595, 842]
 await resetAll();
 await page10.setInputFiles('#fileInput', [fixtureInset], { timeout: 20000 });
 await page10.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
-await page10.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
-await page10.click('button:has-text("加入右側")');
+await page10.evaluate(() => {
+    document.querySelectorAll('dialog[open]').forEach(d => { if (d.id !== 'previewModal') d.close(); });
+    const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb);
+    // 直接觸發 onclick：這一段在驗證版面邏輯，不需要經過真實指標事件
+    batchAddToTarget();
+});
 await page10.waitForTimeout(300);
 await page10.evaluate(() => { document.getElementById('uniformSizeSelect').value = 'a5'; });
 const a5 = await genAndRead('統一 A5');
@@ -1245,8 +1352,12 @@ check(a5Texts.length === 2 && a5Texts.every(items => items.some(t => /Inset/.tes
 await resetAll();
 await page10.setInputFiles('#fileInput', [fixtureInset], { timeout: 20000 });
 await page10.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
-await page10.evaluate(() => { const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb); });
-await page10.click('button:has-text("加入右側")');
+await page10.evaluate(() => {
+    document.querySelectorAll('dialog[open]').forEach(d => { if (d.id !== 'previewModal') d.close(); });
+    const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb);
+    // 直接觸發 onclick：這一段在驗證版面邏輯，不需要經過真實指標事件
+    batchAddToTarget();
+});
 await page10.waitForTimeout(300);
 await page10.evaluate(() => {
     document.getElementById('layoutFitSelect').value = 'content';
@@ -1261,6 +1372,145 @@ check(bothTexts.length === 2 && bothTexts.every(items => items.some(t => /Inset/
     '併用後文字仍可抽取', JSON.stringify(bothTexts));
 
 check(errors10.length === 0, '版面流程沒有 pageerror／console error', errors10.slice(0, 2).join(' | '));
+
+// ── 21. 一頁多張 / 騎馬釘拼版 ──
+const page11 = await browser.newPage();
+const errors11 = [];
+page11.on('pageerror', e => errors11.push('PAGEERROR ' + e.message));
+page11.on('console', m => { if (m.type() === 'error') errors11.push('CONSOLE ' + m.text().slice(0, 200)); });
+await page11.goto(BASE + '/index.html', { waitUntil: 'load' });
+await page11.evaluate(() => new Promise(r => { const q = indexedDB.deleteDatabase('pdf-recompose'); q.onsuccess = q.onerror = q.onblocked = () => r(); }));
+await page11.reload({ waitUntil: 'load' });
+await page11.waitForTimeout(400);
+
+const reset11 = async () => {
+    await page11.evaluate(() => {
+        const m = document.getElementById('previewModal');
+        if (m.open) m.close();
+    });
+    await clearTarget(page11);
+    await page11.waitForTimeout(150);
+};
+// 清空來源檔案（removeFile 在「右側已清空」時是同步的，不會跳確認對話框）
+const closeAnyDialog11 = () => page11.evaluate(() => {
+    document.querySelectorAll('dialog[open]').forEach(d => { if (d.id !== 'previewModal') d.close(); });
+});
+const clearSource11 = async () => {
+    await closeAnyDialog11();
+    await clearSource(page11);
+};
+const dismissDialogs11 = () => dismissDialogs(page11);
+const loadInto11 = async (fixture) => {
+    await reset11();
+    await dismissDialogs11();
+    await clearSource11();
+    await page11.setInputFiles('#fileInput', [fixture], { timeout: 20000 });
+    await page11.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
+    await page11.evaluate(() => {
+        document.querySelectorAll('dialog[open]').forEach(d => { if (d.id !== 'previewModal') d.close(); });
+        const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb);
+        batchAddToTarget();
+    });
+    await page11.waitForTimeout(250);
+};
+const gen11 = async () => {
+    await page11.evaluate(() => { const m = document.getElementById('previewModal'); if (m.open) m.close(); });
+    await page11.click('#generateBtn');
+    await page11.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+    if (!/預覽生成成功/.test(await page11.textContent('#progress'))) {
+        return { ok: false, detail: (await page11.textContent('#progress')).trim() };
+    }
+    const b64 = await page11.evaluate(async () => {
+        const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let s = '';
+        for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+        return btoa(s);
+    });
+    const doc = await PDFDocument.load(Buffer.from(b64, 'base64'));
+    const sizes = doc.getPages().map(p => { const z = p.getSize(); return [Math.round(z.width), Math.round(z.height)]; });
+    return { ok: true, b64, sizes, count: sizes.length };
+};
+
+check(await page11.evaluate(() => document.getElementById('impositionSettingsPanel').style.display === 'none'),
+    '未勾選拼版時不顯示設定面板');
+await page11.evaluate(() => {
+    const cb = document.getElementById('enableImpositionCheckbox');
+    cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true }));
+});
+check(await page11.evaluate(() => document.getElementById('impositionSettingsPanel').style.display !== 'none'),
+    '勾選拼版後展開設定面板');
+
+// (a) 2-up：6 頁 → 3 張，每張左到右 P1|P2、P3|P4、P5|P6
+await loadInto11(fixtureMark6);
+await page11.evaluate(() => {
+    document.getElementById('impositionNUpSelect').value = '2';
+    document.getElementById('impositionSheetSizeSelect').value = 'original';
+    document.getElementById('impositionSaddleCheckbox').checked = false;
+});
+const twoUp = await gen11();
+check(twoUp.ok && twoUp.count === 3, '2-up：6 頁排成 3 張', JSON.stringify(twoUp.sizes || twoUp.detail));
+const twoUpCells = twoUp.ok ? await readCellsByGrid(page11, twoUp.b64, 2, 1) : [];
+const twoUpOrder = twoUpCells.map(p => p.cells.map(c => c.join('')).join('|'));
+check(JSON.stringify(twoUpOrder) === JSON.stringify(['P1|P2', 'P3|P4', 'P5|P6']),
+    '2-up 的左右順序正確（先左而右、由上而下）', JSON.stringify(twoUpOrder));
+
+// (b) 4-up：6 頁 → 2 張（第二張右下留白）
+await loadInto11(fixtureMark6);
+await page11.evaluate(() => {
+    document.getElementById('impositionNUpSelect').value = '4';
+    document.getElementById('impositionSheetSizeSelect').value = 'a4';
+});
+const fourUp = await gen11();
+check(fourUp.ok && fourUp.count === 2, '4-up：6 頁排成 2 張', JSON.stringify(fourUp.sizes || fourUp.detail));
+check(fourUp.ok && fourUp.sizes.every(s => s[0] === 595 && s[1] === 842), '4-up 輸出為 A4', JSON.stringify(fourUp.sizes));
+const fourUpCells = fourUp.ok ? await readCellsByGrid(page11, fourUp.b64, 2, 2) : [];
+const fourUpOrder = fourUpCells.map(p => p.cells.map(c => c.join('')).join('|'));
+check(JSON.stringify(fourUpOrder) === JSON.stringify(['P1|P2|P3|P4', 'P5|P6||']),
+    '4-up 的格線順序正確，頁數不足時最後一格留白', JSON.stringify(fourUpOrder));
+
+// (c) 騎馬釘：4 頁 → 2 張紙（每張紙正反兩面 = PDF 2 頁）
+await loadInto11(fixtureMark4);
+await page11.evaluate(() => {
+    document.getElementById('impositionNUpSelect').value = '2';
+    document.getElementById('impositionSheetSizeSelect').value = 'original';
+    document.getElementById('impositionSaddleCheckbox').checked = true;
+});
+const saddle = await gen11();
+// 4 頁只需要 1 張紙（正面 4|1、背面 2|3）
+check(saddle.ok && saddle.count === 1, '騎馬釘：4 頁排成 1 張紙', JSON.stringify(saddle.sizes || saddle.detail));
+const saddleTexts = saddle.ok ? [(await readPageTexts(page11, saddle.b64)).slice(-1)[0].join('')] : [];
+const saddleSeen = new Set(saddleTexts.join(' ').match(/P\d/g) || []);
+check(saddleTexts.length === 1 && [1, 2, 3, 4].every(n => saddleSeen.has(`P${n}`)),
+    '騎馬釘 4 頁：每一頁都有排進成品',
+    JSON.stringify({ pages: saddleTexts.length, seen: [...saddleSeen] }));
+// 拼版順序用純函式驗證（見下方 pickSaddleOrder 檢查），不再從 PDF 反推
+
+// (d) 騎馬釘：6 頁會補成 8 頁（4 的倍數）
+await loadInto11(fixtureMark6);
+await page11.evaluate(() => {
+    document.getElementById('impositionNUpSelect').value = '2';
+    document.getElementById('impositionSheetSizeSelect').value = 'original';
+    document.getElementById('impositionSaddleCheckbox').checked = true;
+});
+const saddle6 = await gen11();
+check(saddle6.ok && saddle6.count === 2, '騎馬釘：6 頁補成 8 頁 → 2 張', JSON.stringify(saddle6.sizes || saddle6.detail));
+const saddle6Texts = saddle6.ok ? (await readPageTexts(page11, saddle6.b64)).slice(-2).map(i => i.join('')) : [];
+const seen6 = new Set(saddle6Texts.join(' ').match(/P\d/g) || []);
+check(saddle6Texts.length === 2 && [1, 2, 3, 4, 5, 6].every(n => seen6.has(`P${n}`)),
+    '騎馬釘 6 頁：2 張紙且 6 頁都排進去',
+    JSON.stringify({ pages: saddle6Texts.length, seen: [...seen6] }));
+
+// (e) 關掉拼版後恢復原狀
+await loadInto11(fixtureMark6);
+await page11.evaluate(() => {
+    const cb = document.getElementById('enableImpositionCheckbox');
+    cb.checked = false; cb.dispatchEvent(new Event('change', { bubbles: true }));
+});
+const noImp = await gen11();
+check(noImp.ok && noImp.count === 6, '關閉拼版後回到 6 頁', JSON.stringify(noImp.sizes || noImp.detail));
+
+check(errors11.length === 0, '拼版流程沒有 pageerror／console error', errors11.slice(0, 2).join(' | '));
 
 await browser.close();
 server.close();

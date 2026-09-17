@@ -724,6 +724,9 @@ input[type="file"] { display: none; }
 .toc-reset-btn:hover { background: var(--dark-3); }
 /* 快速套用是次要動作，跟主按鈕區隔開來 */
 button.toc-reset-btn.toc-preset-btn { margin: 0; height: 28px; padding: 0 8px; font-size: 11px; white-space: nowrap; }
+/* 面板內的行內 checkbox（例如「畫格線」） */
+.toc-field .toc-inline-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dark-fg); cursor: pointer; }
+.toc-field .toc-inline-check input[type="checkbox"] { width: 15px; height: 15px; flex: 0 0 auto; }
 /* 四個快速套用要擠在同一列 */
 .toc-field .toc-input-row { flex-wrap: wrap; }
 

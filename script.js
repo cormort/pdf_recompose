@@ -119,6 +119,7 @@ window.onload = function() {
     const marksSettingsPanel = document.getElementById('marksSettingsPanel');
     const watermarkSettingsPanel = document.getElementById('watermarkSettingsPanel');
     const layoutSettingsPanel = document.getElementById('layoutSettingsPanel');
+    const impositionSettingsPanel = document.getElementById('impositionSettingsPanel');
     const previewModal = document.getElementById('previewModal');
 
     // ------------------------------------------------------
@@ -163,6 +164,7 @@ window.onload = function() {
     window.resetTocSettings = resetTocSettings;
     window.resetWatermarkSettings = resetWatermarkSettings;
     window.resetLayoutSettings = resetLayoutSettings;
+    window.resetImpositionSettings = resetImpositionSettings;
     window.resetPageNumberSettings = resetPageNumberSettings;
     window.applyPageNumberPreset = applyPageNumberPreset;
 
@@ -293,6 +295,14 @@ window.onload = function() {
     if (addMarksCheckbox && marksSettingsPanel) {
         addMarksCheckbox.addEventListener('change', function() {
             marksSettingsPanel.style.display = this.checked ? 'block' : 'none';
+        });
+    }
+
+    // 拼版設定面板切換
+    const enableImpositionCheckbox = document.getElementById('enableImpositionCheckbox');
+    if (enableImpositionCheckbox && impositionSettingsPanel) {
+        enableImpositionCheckbox.addEventListener('change', function() {
+            impositionSettingsPanel.style.display = this.checked ? 'block' : 'none';
         });
     }
 
@@ -917,6 +927,186 @@ window.onload = function() {
         }
         page.setMediaBox(0, 0, tw, th);
         page.setCropBox(0, 0, tw, th);
+    }
+
+    // ------------------------------------------------------
+    // 一頁多張／騎馬釘拼版
+    // ------------------------------------------------------
+
+    // 註：buildSaddleOrder 是純函式，介面足夠小，所以直接斷言它的輸出
+    //（verify.mjs 有單元檢查）。純函式用單元測試比透過產出 PDF 反推可靠得多。
+
+    const SHEET_SIZES = {
+        a4: [595.28, 841.89],
+        a5: [419.53, 595.28],
+        letter: [612, 792],
+    };
+
+    // 每張要排幾頁、以及格子是幾欄幾列
+    function gridForNUp(n) {
+        if (n >= 9) return { cols: 3, rows: 3 };
+        if (n >= 6) return { cols: 3, rows: 2 };
+        if (n >= 4) return { cols: 2, rows: 2 };
+        if (n >= 2) return { cols: 2, rows: 1 };
+        return { cols: 1, rows: 1 };
+    }
+
+    // 騎馬釘的頁序：n 頁（4 的倍數）→ 依序要放到每一格的是「第幾頁」。
+    // 標準作法是「外層配內層」，對折後頁碼才會連續：
+    //   4 頁 → [4,1, 2,3]        第 1 張：P4|P1，第 2 張：P2|P3
+    //   8 頁 → [8,1, 2,7, 6,3, 4,5]
+    // 回傳 0 起算的索引（呼叫端直接拿去查陣列，不要再自行加減一）。
+    // 騎馬釘拼版順序（純函式：輸入頁數、回傳每一格該放第幾頁，0 起算）。
+    // 一張紙有兩面、每面兩格，所以 n 頁需要 n/4 張紙；k 為紙張編號（0 起算）：
+    //   正面： (n-2k) | (2k+1)
+    //   背面： (2k+2) | (n-1-2k)
+    // 例：n=4 → [4|1, 2|3]；n=8 → [8|1, 2|7, 6|3, 4|5]
+    // 對折後依序攤開即為 1,2,3...n。n 必須是 4 的倍數。
+    function buildSaddleOrder(pageCount) {
+        const out = [];
+        for (let k = 0; k < pageCount / 4; k++) {
+            out.push(pageCount - 2 * k);      // 正面左
+            out.push(2 * k + 1);              // 正面右
+            out.push(2 * k + 2);              // 背面左
+            out.push(pageCount - 1 - 2 * k);  // 背面右
+        }
+        return out.map(pageNo => pageNo - 1);
+    }
+
+    function readImpositionConfig() {
+        const enabled = !!(document.getElementById('enableImpositionCheckbox') || {}).checked;
+        if (!enabled) return { enabled: false, n: 1, saddle: false, border: false, order: 'row', sheetSize: null };
+        const rawN = parseInt(document.getElementById('impositionNUpSelect').value, 10);
+        const n = [1, 2, 4, 6, 9].includes(rawN) ? rawN : 1;
+        const sheetKey = document.getElementById('impositionSheetSizeSelect').value;
+        return {
+            enabled: n > 1,
+            n,
+            saddle: !!document.getElementById('impositionSaddleCheckbox').checked,
+            border: !!document.getElementById('impositionBorderCheckbox').checked,
+            order: document.getElementById('impositionOrderSelect').value === 'column' ? 'column' : 'row',
+            sheetSize: sheetKey === 'original' ? null : (SHEET_SIZES[sheetKey] || null),
+        };
+    }
+
+    function resetImpositionSettings() {
+        document.getElementById('impositionNUpSelect').value = '2';
+        document.getElementById('impositionSheetSizeSelect').value = 'original';
+        document.getElementById('impositionOrderSelect').value = 'row';
+        document.getElementById('impositionSaddleCheckbox').checked = false;
+        document.getElementById('impositionBorderCheckbox').checked = false;
+        showNotification('✅ 拼版設定已重設', 'success');
+    }
+
+    // 把 contentEntries 重新排成拼版後的單張頁面，並移除原本的頁面。
+    // 回傳新的 contentEntries（每一項代表「一張紙」）。
+    async function buildImposition(pdfDoc, contentEntries, config, ctx) {
+        const { rgb, PDFDocument } = ctx;
+        const n = config.n;
+        const { cols, rows } = gridForNUp(n);
+
+        // 把要拼版的頁面先複製到一個「暫存文件」，之後一律從那裡 embedPage。
+        // 原因：pdf-lib 的 removePage() 會把同文件內已建立的 XObject 內容一起清掉
+        // （實測：拼完再刪原頁面 → 整張紙空白且不報錯）。改成跨文件 embed，
+        // 原頁面被刪掉時就不會影響暫存文件裡的來源，XObject 也還有效。
+        const firstSize = contentEntries[0] && contentEntries[0].page
+            ? contentEntries[0].page.getSize() : { width: 595.28, height: 841.89 };
+        const scratch = await PDFDocument.create();
+        // pdf-lib 沒有 getPageIndex()，用 getPages() 的位置自己找
+        const allPages = pdfDoc.getPages();
+        const copied = await scratch.copyPages(pdfDoc, contentEntries.map(entry => allPages.indexOf(entry.page)));
+
+        // 決定每一格要放第幾頁（索引指向 contentEntries；-1 表示留白）
+        const cellsPerSide = cols * rows;
+        // 騎馬釘時每一張紙有「正、反」兩面，所以需要的格數是一般拼版的兩倍
+        const cellsPerSheet = cellsPerSide * (config.saddle ? 2 : 1);
+
+        let slots = [];
+        if (config.saddle) {
+            // buildSaddleOrder 回傳的是「每一格該放第幾頁」，且已經按
+            // 「第 1 張正面、第 1 張背面、第 2 張正面...」的順序排好（每面 cellsPerSide 格）；
+            // 不足的頁數以 -1 補成 4 的倍數（空白頁）。
+            let totalPages = contentEntries.length;
+            while (totalPages % 4 !== 0) totalPages++;
+            slots = buildSaddleOrder(totalPages);
+            // 頁數不足時，補出來的空白頁索引會超出 contentEntries，畫的時候跳過即可
+        } else {
+            for (let i = 0; i < contentEntries.length; i++) slots.push(i);
+        }
+
+        // 補到每張紙剛好的格數
+        while (slots.length % cellsPerSheet !== 0) slots.push(-1);
+        // 騎馬釘時 buildSaddleOrder 已經給「每一格該放第幾頁」，一張紙佔 2 面 × 每面格數；
+        // 非騎馬釘時 slots 是「每頁一次」，換算成一張紙的格數即可。
+        const sheetCount = config.saddle
+            ? slots.length / cellsPerSheet
+            : Math.ceil(slots.length / cellsPerSheet);
+
+        const originals = contentEntries.map(e => e.page);
+        const sheetEntries = [];
+
+        for (let s = 0; s < sheetCount; s++) {
+            const first = originals[0];
+            const baseSize = config.sheetSize || (first ? [first.getSize().width, first.getSize().height] : [595.28, 841.89]);
+            const [sw, sh] = baseSize;
+            const cellW = sw / cols;
+            const cellH = sh / rows;
+            const sheet = pdfDoc.addPage([sw, sh]);
+
+            for (let k = 0; k < cellsPerSide; k++) {
+                // 騎馬釘時每一張紙要輸出「正面」與「背面」兩頁（雙面列印後對折），
+                // 所以每面各畫一次；其他拼版模式只有一面。
+                const sides = config.saddle ? [0, 1] : [0];
+                for (const side of sides) {
+                const entryIndex = slots[s * cellsPerSheet + side * cellsPerSide + k];
+                // 依排列方向決定這一格在哪一欄哪一列
+                const col = config.order === 'column' ? Math.floor(k / rows) : (k % cols);
+                const row = config.order === 'column' ? (k % rows) : Math.floor(k / cols);
+                const cellLeft = col * cellW;
+                const cellTop = sh - (row + 1) * cellH; // PDF 的原點在左下
+
+                if (config.border) {
+                    sheet.drawRectangle({
+                        x: cellLeft, y: cellTop, width: cellW, height: cellH,
+                        borderColor: rgb(0.75, 0.75, 0.78), borderWidth: 0.5,
+                    });
+                }
+                if (entryIndex < 0 || entryIndex >= copied.length) continue; // 留白
+
+                const sourcePage = copied[entryIndex];
+                if (!sourcePage || typeof sourcePage.getSize !== 'function') continue;
+                const size = sourcePage.getSize();
+                if (!(size.width > 0 && size.height > 0)) continue;
+                const embedded = await pdfDoc.embedPage(sourcePage);
+                const scale = Math.min(cellW / size.width, cellH / size.height);
+                const w = size.width * scale, h = size.height * scale;
+                sheet.drawPage(embedded, {
+                    x: cellLeft + (cellW - w) / 2,
+                    y: cellTop + (cellH - h) / 2,
+                    xScale: scale, yScale: scale,
+                });
+                }
+            }
+            // 這一張紙上第一個「真的有頁面」的項目，用來當代表（大綱／頁碼會用到它的標題）。
+            // 整張都是補出來的空白頁時，給一個安全的最小物件，避免後面讀 item.pageNum 爆掉。
+            let representative = null;
+            for (let k = 0; k < cellsPerSheet; k++) {
+                const entryIndex = slots[s * cellsPerSheet + k];
+                if (entryIndex >= 0 && contentEntries[entryIndex]) { representative = contentEntries[entryIndex].item; break; }
+            }
+            sheetEntries.push({
+                page: sheet,
+                item: representative || { pageNum: null, fileName: '', firstLine: '' },
+            });
+        }
+
+        // 移除原本的頁面：務必在所有 embedPage 完成之後才做（removePage 會清掉 XObject）。
+        // 由後往前刪，索引才不會位移。
+        for (let i = originals.length - 1; i >= 0; i--) {
+            const idx = pdfDoc.getPages().indexOf(originals[i]);
+            if (idx >= 0) pdfDoc.removePage(idx);
+        }
+        return sheetEntries;
     }
 
     // ------------------------------------------------------
@@ -2668,12 +2858,13 @@ window.onload = function() {
             const addToc = addTocCheckbox.checked;
             const addMarks = !!(document.getElementById('addMarksCheckbox') || {}).checked;
             const layoutConfig = readLayoutConfig();
+            const impositionConfig = readImpositionConfig();
             const addBookmarks = !!(document.getElementById('addBookmarksCheckbox') || {}).checked;
 
             // --- 合併內容頁 ---
             // 先合併、再畫目錄：目錄的頁碼與超連結必須對應「真的進了輸出」的內容頁。
             // 若某頁複製失敗還照樣印一行，後面所有頁碼與超連結都會整體位移。
-            const contentEntries = []; // 依 selectedPages 順序，只放成功複製的內容頁
+            let contentEntries = []; // 依 selectedPages 順序，只放成功複製的內容頁
             let pageCounterForContent = 0;
 
             for (const item of selectedPages) {
@@ -2744,6 +2935,19 @@ window.onload = function() {
                     } catch (sizeError) {
                         console.error('統一頁面尺寸失敗，保留原尺寸：', sizeError);
                     }
+                }
+            }
+
+            // --- 一頁多張／騎馬釘拼版 ---
+            // 放在目錄排版之前：拼版會重建頁面並移除原頁面，之後的目錄超連結、
+            // 書籤、頁碼與浮水印都會落在拼版後的紙張上。
+            if (impositionConfig.enabled && contentEntries.length > 0) {
+                progress.textContent = '正在拼版...';
+                try {
+                    contentEntries = await buildImposition(newPdf, contentEntries, impositionConfig, { rgb, PDFDocument });
+                } catch (impError) {
+                    console.error('拼版失敗，保留原頁面：', impError);
+                    showNotification('⚠️ 拼版失敗，已保留原頁面。', 'error');
                 }
             }
 
