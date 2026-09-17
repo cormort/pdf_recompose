@@ -71,6 +71,7 @@ window.onload = function() {
     let sessionSaveInFlight = false;
     let sessionSavePending = false;
     let sessionEnabled = true;
+    let lastExportZip = null;   // 最近一次拆檔產生的 ZIP（供測試取用）
     let sessionDirty = false;   // 有沒有「還沒寫進去的變更」
     let sessionSavePromise = null; // 進行中的寫入（清空工作階段時要等它結束）
 
@@ -120,6 +121,7 @@ window.onload = function() {
     const watermarkSettingsPanel = document.getElementById('watermarkSettingsPanel');
     const layoutSettingsPanel = document.getElementById('layoutSettingsPanel');
     const impositionSettingsPanel = document.getElementById('impositionSettingsPanel');
+    const splitSettingsPanel = document.getElementById('splitSettingsPanel');
     const previewModal = document.getElementById('previewModal');
 
     // ------------------------------------------------------
@@ -165,6 +167,27 @@ window.onload = function() {
     window.resetWatermarkSettings = resetWatermarkSettings;
     window.resetLayoutSettings = resetLayoutSettings;
     window.resetImpositionSettings = resetImpositionSettings;
+    window.resetSplitSettings = resetSplitSettings;
+    // 驗證用：把最後一個小節移到最前面（等同拖曳），讓「開頭小節」的情境可測
+    // 驗證用：目前右側的分組（每個小節含哪些頁）
+    window.getRawOrder = () => selectedPages.map(i => i.type === 'divider' ? `D:${i.firstLine}` : `P${i.pageNum}`);
+    window.getSectionGroups = () => groupPagesBySection(selectedPages).map(g => ({
+        title: g.title, pages: g.items.map(i => i.pageNum),
+    }));
+    // 驗證用：把最後一個項目（小節或頁面）搬到指定位置，等同拖曳
+    window.moveLastItemTo = (index) => applyEdit('調整頁面順序', () => {
+        if (selectedPages.length === 0) return;
+        const last = selectedPages.pop();
+        const target = Math.max(0, Math.min(index, selectedPages.length));
+        selectedPages.splice(target, 0, last);
+    });
+    // 驗證用：取回最近一次拆檔的 ZIP（base64）
+    window.getLastExportZip = () => {
+        if (!lastExportZip) return null;
+        let bin = '';
+        for (let i = 0; i < lastExportZip.length; i++) bin += String.fromCharCode(lastExportZip[i]);
+        return btoa(bin);
+    };
     window.resetPageNumberSettings = resetPageNumberSettings;
     window.applyPageNumberPreset = applyPageNumberPreset;
 
@@ -295,6 +318,14 @@ window.onload = function() {
     if (addMarksCheckbox && marksSettingsPanel) {
         addMarksCheckbox.addEventListener('change', function() {
             marksSettingsPanel.style.display = this.checked ? 'block' : 'none';
+        });
+    }
+
+    // 拆檔設定面板切換
+    const enableSplitCheckbox = document.getElementById('enableSplitCheckbox');
+    if (enableSplitCheckbox && splitSettingsPanel) {
+        enableSplitCheckbox.addEventListener('change', function() {
+            splitSettingsPanel.style.display = this.checked ? 'block' : 'none';
         });
     }
 
@@ -927,6 +958,238 @@ window.onload = function() {
         }
         page.setMediaBox(0, 0, tw, th);
         page.setCropBox(0, 0, tw, th);
+    }
+
+    // ------------------------------------------------------
+    // 依小節拆成多檔（打包成 ZIP 下載）
+    // ------------------------------------------------------
+
+    // 只做 STORE（不壓縮）的 ZIP：PDF 本身已經壓縮過，再壓收益很低，
+    // 而 STORE 的格式簡單到可以自己寫，不必為了打包多帶一個函式庫進來。
+    function crc32(bytes) {
+        if (!crc32.table) {
+            const table = new Uint32Array(256);
+            for (let n = 0; n < 256; n++) {
+                let c = n;
+                for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+                table[n] = c >>> 0;
+            }
+            crc32.table = table;
+        }
+        const table = crc32.table;
+        let crc = 0xFFFFFFFF;
+        for (let i = 0; i < bytes.length; i++) crc = table[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+        return (crc ^ 0xFFFFFFFF) >>> 0;
+    }
+
+    // files: [{ name, data: Uint8Array }]
+    function buildZip(files) {
+        const enc = new TextEncoder();
+        const chunks = [];
+        const central = [];
+        let offset = 0;
+        for (const file of files) {
+            const nameBytes = enc.encode(file.name);
+            const crc = crc32(file.data);
+            const size = file.data.length;
+            const local = new Uint8Array(30 + nameBytes.length);
+            const lv = new DataView(local.buffer);
+            lv.setUint32(0, 0x04034b50, true);   // local file header
+            lv.setUint16(4, 20, true);           // version needed
+            lv.setUint16(6, 0x0800, true);       // bit 11：檔名是 UTF-8
+            lv.setUint16(8, 0, true);            // STORE
+            lv.setUint32(14, crc, true);
+            lv.setUint32(18, size, true);
+            lv.setUint32(22, size, true);
+            lv.setUint16(26, nameBytes.length, true);
+            local.set(nameBytes, 30);
+            chunks.push(local, file.data);
+            central.push({ nameBytes, crc, size, offset });
+            offset += local.length + size;
+        }
+        const centralStart = offset;
+        for (const e of central) {
+            const rec = new Uint8Array(46 + e.nameBytes.length);
+            const cv = new DataView(rec.buffer);
+            cv.setUint32(0, 0x02014b50, true);   // central directory header
+            cv.setUint16(4, 20, true);
+            cv.setUint16(6, 20, true);
+            cv.setUint16(8, 0x0800, true);
+            cv.setUint16(10, 0, true);
+            cv.setUint32(16, e.crc, true);
+            cv.setUint32(20, e.size, true);
+            cv.setUint32(24, e.size, true);
+            cv.setUint16(28, e.nameBytes.length, true);
+            cv.setUint32(42, e.offset, true);
+            rec.set(e.nameBytes, 46);
+            chunks.push(rec);
+            offset += rec.length;
+        }
+        const eocd = new Uint8Array(22);
+        const ev = new DataView(eocd.buffer);
+        ev.setUint32(0, 0x06054b50, true);       // end of central directory
+        ev.setUint16(8, central.length, true);
+        ev.setUint16(10, central.length, true);
+        ev.setUint32(12, offset - centralStart, true);
+        ev.setUint32(16, centralStart, true);
+        chunks.push(eocd);
+
+        const total = chunks.reduce((n, c) => n + c.length, 0);
+        const out = new Uint8Array(total);
+        let pos = 0;
+        for (const c of chunks) { out.set(c, pos); pos += c.length; }
+        return out;
+    }
+
+    // 觸發瀏覽器下載（統一的 blob 下載路徑，ZIP 與單檔共用）
+    function downloadBlob(blob, fileName) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            try { document.body.removeChild(a); URL.revokeObjectURL(url); } catch (e) { /* 已清理 */ }
+        }, 100);
+    }
+
+    // 檔名不能含路徑分隔字元；Windows／macOS 的保留字也一併換掉
+    function sanitizeFileName(name) {
+        return String(name || '')
+            .replace(/[\\/:*?"<>|]/g, '_')
+            .replace(/[\x00-\x1f]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 80) || 'untitled';
+    }
+
+    function readSplitConfig() {
+        const enabled = !!(document.getElementById('enableSplitCheckbox') || {}).checked;
+        if (!enabled) return { enabled: false };
+        const raw = document.getElementById('splitNameFormat').value;
+        const padWidth = clampNumber(document.getElementById('splitPadWidth').value, 1, 4, 2);
+        return {
+            enabled: true,
+            format: (typeof raw === 'string' && raw.trim()) ? raw.trim() : '{title}',
+            padWidth: Math.round(padWidth),
+        };
+    }
+
+    function resetSplitSettings() {
+        document.getElementById('splitNameFormat').value = '{title}';
+        document.getElementById('splitPadWidth').value = 2;
+        showNotification('✅ 拆檔設定已重設', 'success');
+    }
+
+    // 依小節把成品分組：小節標題之後的頁面都屬於那個小節；開頭沒有小節的頁面自成一群。
+    function groupPagesBySection(items) {
+        const groups = [];
+        let current = null;
+        for (const item of items) {
+            if (!item) continue;
+            if (item.type === 'divider') {
+                current = { title: item.firstLine || '未命名小節', items: [] };
+                groups.push(current);
+                continue;
+            }
+            if (!current) {
+                current = { title: '', items: [] };
+                groups.push(current);
+            }
+            current.items.push(item);
+        }
+        return groups.filter(g => g.items.length > 0);
+    }
+
+    // 產生一組檔名：套用格式、去重、補編號
+    function buildSplitFileNames(groups, config, dateText) {
+        const used = new Set();
+        const total = groups.length;
+        return groups.map((group, index) => {
+            const n = String(index + 1).padStart(config.padWidth, '0');
+            const title = group.title || `第${n}部分`;
+            let name = config.format
+                .replace(/\{n\}/g, n)
+                .replace(/\{title\}/g, title)
+                .replace(/\{total\}/g, String(total))
+                .replace(/\{date\}/g, dateText);
+            name = sanitizeFileName(name);
+            if (!/\.pdf$/i.test(name)) name += '.pdf';
+            // 同名時補流水號，避免覆蓋
+            let candidate = name;
+            let suffix = 2;
+            while (used.has(candidate.toLowerCase())) {
+                candidate = name.replace(/\.pdf$/i, `_${suffix}.pdf`);
+                suffix++;
+            }
+            used.add(candidate.toLowerCase());
+            return candidate;
+        });
+    }
+
+    // 拆檔時為「一個小節」產生一份 PDF。只套用直接作用在頁面上的設定
+    // （裁切、統一尺寸、頁碼／頁首／頁尾），不含目錄頁與書籤大綱 ——
+    // 那些是「整份文件」層級的東西，逐檔重複產生反而奇怪。
+    async function buildSplitPdf(sectionItems, deps) {
+        const { PDFDocument, rgb, StandardFonts, degrees } = PDFLib;
+        const { layoutConfig, marksConfig, splitIndex, splitTotal, dateText, customFont, asciiFont, cjkFont, cjkFontAvailable } = deps;
+        const out = await PDFDocument.create();
+        const cache = new Map();
+        const entries = [];
+
+        for (const item of sectionItems) {
+            const sourceFile = pdfFiles[item.fileIndex];
+            if (!sourceFile || !sourceFile.file || !item.pageNum) continue;
+            try {
+                let sourcePdf = cache.get(item.fileIndex);
+                if (!sourcePdf) {
+                    sourcePdf = await PDFDocument.load(await sourceFile.file.arrayBuffer(), {
+                        ignoreEncryption: true, updateMetadata: false, throwOnInvalidObject: false,
+                    });
+                    cache.set(item.fileIndex, sourcePdf);
+                }
+                if (item.pageNum < 1 || item.pageNum > sourcePdf.getPageCount()) continue;
+                const [copied] = await out.copyPages(sourcePdf, [item.pageNum - 1]);
+                const page = out.addPage(copied);
+                page.setRotation(degrees((copied.getRotation().angle + (item.rotation || 0)) % 360));
+                if (layoutConfig.fit !== 'original') applyCropBox(page, item, layoutConfig);
+                if (layoutConfig.targetSize) {
+                    scalePageToSize(page, layoutConfig.targetSize, PDFLib.concatTransformationMatrix,
+                        PDFLib.pushGraphicsState, PDFLib.popGraphicsState);
+                }
+                entries.push({ item, page });
+            } catch (error) {
+                console.error(`拆檔時處理「${sourceFile.name}」第 ${item.pageNum} 頁失敗：`, error);
+            }
+        }
+
+        // 頁面標記（頁首／頁尾／頁碼）
+        if (marksConfig.length > 0) {
+            const totalPages = entries.length;
+            entries.forEach(({ page, item }, index) => {
+                const { width, height } = page.getSize();
+                if (!(width > 0 && height > 0)) return;
+                for (const mark of marksConfig) {
+                    const label = formatPageNumber(mark.format, {
+                        n: index + 1,
+                        total: totalPages,
+                        name: item.fileName || '',
+                        date: dateText,
+                        section: splitIndex,
+                        sections: splitTotal,
+                    });
+                    if (!label) continue;
+                    const textWidth = watermarkTextWidth(label, mark.size, cjkFont, asciiFont);
+                    const { x, y } = pageNumberPositionXY(mark.position, width, height, textWidth, mark.margin);
+                    try {
+                        drawMixedText(page, label, x, y, mark.size, cjkFont, asciiFont, rgb(0, 0, 0), { cjkFontAvailable });
+                    } catch (e) { /* 單一標記失敗不影響整份輸出 */ }
+                }
+            });
+        }
+        return out.save();
     }
 
     // ------------------------------------------------------
@@ -2859,6 +3122,7 @@ window.onload = function() {
             const addMarks = !!(document.getElementById('addMarksCheckbox') || {}).checked;
             const layoutConfig = readLayoutConfig();
             const impositionConfig = readImpositionConfig();
+            const splitConfig = readSplitConfig();
             const addBookmarks = !!(document.getElementById('addBookmarksCheckbox') || {}).checked;
 
             // --- 合併內容頁 ---
@@ -3245,6 +3509,43 @@ window.onload = function() {
                         console.error(`無法建立超連結 (目標頁 ${targetPageIndex + 1}):`, linkError);
                     }
                 }
+            }
+
+            // --- 依小節拆成多檔（打包 ZIP 下載）---
+            // 放在所有單檔後處理之後：拆檔用的是同一組設定（裁切／統一尺寸／標記），
+            // 這樣「預覽看到的單檔」與「拆出來的檔案」內容才會一致。
+            if (splitConfig.enabled && contentEntries.length > 0) {
+                progress.textContent = '正在拆成多檔...';
+                const groups = groupPagesBySection(selectedPages);
+                const pad2s = (v) => String(v).padStart(2, '0');
+                const today2 = new Date();
+                const dateText = `${today2.getFullYear()}-${pad2s(today2.getMonth() + 1)}-${pad2s(today2.getDate())}`;
+                const names = buildSplitFileNames(groups, splitConfig, dateText);
+                const marksConfig = addMarks ? readMarksConfig() : [];
+                const zipped = [];
+                for (let i = 0; i < groups.length; i++) {
+                    progress.textContent = `正在產生第 ${i + 1}/${groups.length} 個檔案...`;
+                    try {
+                        const bytes = await buildSplitPdf(groups[i].items, {
+                            layoutConfig, marksConfig, splitIndex: i + 1, splitTotal: groups.length,
+                            dateText, customFont, asciiFont, cjkFont, cjkFontAvailable,
+                        });
+                        zipped.push({ name: names[i], data: bytes });
+                    } catch (splitError) {
+                        console.error(`產生「${names[i]}」失敗：`, splitError);
+                    }
+                }
+                if (zipped.length === 0) {
+                    showNotification('⚠️ 拆檔沒有產生任何檔案。', 'error');
+                } else {
+                    const zipBytes = buildZip(zipped);
+                    lastExportZip = zipBytes;
+                    const zipName = `重組後的PDF_${dateText}_${zipped.length}檔.zip`;
+                    downloadBlob(new Blob([zipBytes], { type: 'application/zip' }), zipName);
+                    showNotification(`✅ 已產生 ${zipped.length} 個檔案（ZIP）`, 'success');
+                }
+                finalPdfBytes = await newPdf.save();
+                return; // 拆檔模式下不再走預覽流程
             }
 
             progress.textContent = '正在儲存 PDF...';

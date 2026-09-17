@@ -1512,6 +1512,145 @@ check(noImp.ok && noImp.count === 6, '關閉拼版後回到 6 頁', JSON.stringi
 
 check(errors11.length === 0, '拼版流程沒有 pageerror／console error', errors11.slice(0, 2).join(' | '));
 
+// ── 22. 依小節拆成多檔（ZIP）──
+const page12 = await browser.newPage();
+const errors12 = [];
+page12.on('pageerror', e => errors12.push('PAGEERROR ' + e.message));
+page12.on('console', m => { if (m.type() === 'error') errors12.push('CONSOLE ' + m.text().slice(0, 200)); });
+await page12.goto(BASE + '/index.html', { waitUntil: 'load' });
+await page12.evaluate(() => new Promise(r => { const q = indexedDB.deleteDatabase('pdf-recompose'); q.onsuccess = q.onerror = q.onblocked = () => r(); }));
+await page12.reload({ waitUntil: 'load' });
+await page12.waitForTimeout(400);
+
+// 準備 6 頁 + 兩個小節：| 第一節 | P1 P2 P3 | 第二節 | P4 P5 P6 |
+await page12.setInputFiles('#fileInput', [fixtureMark6], { timeout: 20000 });
+await page12.waitForFunction(() => /載入完成|累計/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
+await page12.evaluate(() => {
+    document.querySelectorAll('dialog[open]').forEach(d => { if (d.id !== 'previewModal') d.close(); });
+    const cb = document.getElementById('selectAllSource'); cb.checked = true; toggleSelectAllSource(cb);
+    batchAddToTarget();
+});
+await page12.waitForTimeout(250);
+// 用真實 UI 加小節、再用拖曳排序的等價操作把它搬到定位
+for (const [title, targetIndex] of [['第一節', 0], ['第二節', 4]]) {
+    await page12.evaluate(() => { addSectionDivider(); });
+    await page12.waitForSelector('#askDialog[open]', { timeout: 5000 });
+    await page12.fill('#askDialogInput', title);
+    await page12.click('#askDialogOk');
+    await page12.waitForTimeout(200);
+    await page12.evaluate((idx) => window.moveLastItemTo(idx), targetIndex);
+    await page12.waitForTimeout(200);
+}
+check(JSON.stringify(await page12.evaluate(() => window.getSectionGroups())) ===
+      JSON.stringify([{ title: '第一節', pages: [1, 2, 3] }, { title: '第二節', pages: [4, 5, 6] }]),
+    '準備好 2 個小節（各 3 頁）',
+    JSON.stringify(await page12.evaluate(() => window.getRawOrder())));
+
+check(await page12.evaluate(() => document.getElementById('splitSettingsPanel').style.display === 'none'),
+    '未勾選拆檔時不顯示設定面板');
+await page12.evaluate(() => {
+    const cb = document.getElementById('enableSplitCheckbox');
+    cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true }));
+});
+check(await page12.evaluate(() => document.getElementById('splitSettingsPanel').style.display !== 'none'),
+    '勾選拆檔後展開設定面板');
+
+await page12.evaluate(() => {
+    document.getElementById('splitNameFormat').value = '{n}-{title}';
+    document.getElementById('splitPadWidth').value = '2';
+});
+// 拆檔會觸發檔案下載；click 要跟 download 事件一起等，否則會卡在等待
+const [download1] = await Promise.all([
+    page12.waitForEvent('download', { timeout: 180000 }).catch(() => null),
+    page12.click('#generateBtn'),
+]);
+check(!!download1, '拆檔會觸發下載（ZIP）');
+await page12.waitForFunction(() => /已產生 \d+ 個檔案/.test(document.getElementById('notification').textContent), null, { timeout: 180000 });
+
+const zipB64 = await page12.evaluate(() => window.getLastExportZip());
+check(!!zipB64, '拆檔會產生 ZIP');
+const zipBuf = Buffer.from(zipB64 || '', 'base64');
+// 解析 ZIP（自己寫的 STORE 格式，逐一驗證 CRC 與內容）
+function unzipStore(buf) {
+    const files = [];
+    let off = buf.readUInt32LE(buf.length - 22 + 16); // EOCD → central directory offset
+    const count = buf.readUInt16LE(buf.length - 22 + 10);
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); table[n] = c >>> 0; }
+    for (let i = 0; i < count; i++) {
+        const nameLen = buf.readUInt16LE(off + 28);
+        const extraLen = buf.readUInt16LE(off + 30);
+        const commentLen = buf.readUInt16LE(off + 32);
+        const crc = buf.readUInt32LE(off + 16);
+        const size = buf.readUInt32LE(off + 24);
+        const lho = buf.readUInt32LE(off + 42);
+        const name = buf.slice(off + 46, off + 46 + nameLen).toString('utf8');
+        const lNameLen = buf.readUInt16LE(lho + 26);
+        const lExtraLen = buf.readUInt16LE(lho + 28);
+        const data = buf.slice(lho + 30 + lNameLen + lExtraLen, lho + 30 + lNameLen + lExtraLen + size);
+        let c = 0xFFFFFFFF;
+        for (const b of data) c = table[(c ^ b) & 0xFF] ^ (c >>> 8);
+        c = (c ^ 0xFFFFFFFF) >>> 0;
+        files.push({ name, size, crcOk: c === crc, data });
+        off += 46 + nameLen + extraLen + commentLen;
+    }
+    return files;
+}
+const zipped = unzipStore(zipBuf);
+check(zipped.length === 2, 'ZIP 內有 2 個檔案（＝2 個小節）', JSON.stringify(zipped.map(f => f.name)));
+check(zipped.every(f => f.crcOk), '每個檔案的 CRC 都正確', JSON.stringify(zipped.map(f => f.crcOk)));
+check(zipped.every(f => f.name.endsWith('.pdf')), '檔名都以 .pdf 結尾', JSON.stringify(zipped.map(f => f.name)));
+check(zipped[0].name === '01-第一節.pdf' && zipped[1].name === '02-第二節.pdf',
+    '檔名套用了「{n}-{title}」格式（含中文）', JSON.stringify(zipped.map(f => f.name)));
+
+// 每個拆出來的 PDF：頁數正確，且只含該小節的頁面
+const perFile = [];
+for (const f of zipped) {
+    const d = await PDFDocument.load(f.data);
+    const texts = [];
+    for (let i = 0; i < d.getPageCount(); i++) texts.push(i);
+    perFile.push({ pages: d.getPageCount() });
+}
+check(perFile[0].pages === 3 && perFile[1].pages === 3,
+    '各檔頁數符合小節範圍（3 頁 + 3 頁）', JSON.stringify(perFile));
+
+// 用 pdf.js 讀出文字，確認檔案內容對應到正確的頁
+const splitTexts = [];
+for (const f of zipped) {
+    const b64 = f.data.toString('base64');
+    splitTexts.push(await readPageTexts(page12, b64));
+}
+const flat0 = splitTexts[0].map(i => i.join(''));
+const flat1 = splitTexts[1].map(i => i.join(''));
+check(flat0.join(' ').match(/P\d/g).join(',') === 'P1,P2,P3',
+    '第一個檔案是「第一節」（P1～P3）', JSON.stringify(flat0));
+check(flat1.join(' ').match(/P\d/g).join(',') === 'P4,P5,P6',
+    '第二個檔案是「第二節」（P4～P6）', JSON.stringify(flat1));
+
+// 保留小節與頁面，但把檔名格式改成「只用編號」→ 驗證格式變數真的有效
+await page12.evaluate(() => { document.getElementById('splitNameFormat').value = '{n}'; });
+await Promise.all([
+    page12.waitForEvent('download', { timeout: 180000 }).catch(() => null),
+    page12.click('#generateBtn'),
+]);
+await page12.waitForFunction(() => /已產生 \d+ 個檔案/.test(document.getElementById('notification').textContent), null, { timeout: 180000 });
+const zip2 = unzipStore(Buffer.from(await page12.evaluate(() => window.getLastExportZip()), 'base64'));
+check(zip2.length === 2 && zip2.every(f => f.crcOk) &&
+      zip2[0].name === '01.pdf' && zip2[1].name === '02.pdf',
+    '檔名格式可只用編號（{n}）', JSON.stringify(zip2.map(f => f.name)));
+
+// 關閉拆檔後回到單檔流程
+await page12.evaluate(() => {
+    const cb = document.getElementById('enableSplitCheckbox');
+    cb.checked = false; cb.dispatchEvent(new Event('change', { bubbles: true }));
+    const m = document.getElementById('previewModal'); if (m.open) m.close();
+});
+await page12.click('#generateBtn');
+await page12.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+check(/預覽生成成功/.test(await page12.textContent('#progress')), '關閉拆檔後回到單檔預覽流程');
+
+check(errors12.length === 0, '拆檔流程沒有 pageerror／console error', errors12.slice(0, 2).join(' | '));
+
 await browser.close();
 server.close();
 

@@ -706,7 +706,7 @@ input[type="file"] { display: none; }
 .toc-field .toc-input-wide { width: 100%; }
 /* 下拉選單的選項文字（例如「置中（單一）」）在 68px 內會被截掉 */
 .toc-field select.toc-input { width: 100%; }
-.toc-field.toc-field-full { grid-column: 1 / -1; }
+.toc-field.toc-field-full, .toc-field.toc-full { grid-column: 1 / -1; }
 
 .toc-reset-btn {
     margin-top: 12px;

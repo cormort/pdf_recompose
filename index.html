@@ -316,6 +316,42 @@
 
             <div class="option-card">
                 <label>
+                    <input type="checkbox" id="enableSplitCheckbox">
+                    <span>✂️ 依小節拆成多檔</span>
+                </label>
+                <p class="option-hint">每個小節各輸出一個 PDF；沒有小節時每頁一個檔。下載時會打包成一個 ZIP。</p>
+
+                <div id="splitSettingsPanel" class="toc-settings" style="display: none;">
+                    <div class="toc-settings-title">⚙️ 拆檔設定</div>
+
+                    <div class="toc-settings-grid">
+                        <div class="toc-field toc-full">
+                            <label>檔名格式</label>
+                            <div class="toc-input-row">
+                                <input type="text" id="splitNameFormat" class="toc-input toc-input-wide" value="{title}" maxlength="60">
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>編號位數</label>
+                            <div class="toc-input-row">
+                                <input type="number" id="splitPadWidth" class="toc-input" min="1" max="4" value="2">
+                                <span class="toc-unit">位</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <p class="option-hint">可用變數：<code>{n}</code> 編號、<code>{title}</code> 小節標題、<code>{total}</code> 總檔數、<code>{date}</code> 日期。
+                    標題含 <code>/ \ : * ? " &lt; &gt; |</code> 等字元會自動替換。</p>
+
+                    <button onclick="resetSplitSettings()" class="toc-reset-btn">
+                        🔄 重設為預設值
+                    </button>
+                </div>
+            </div>
+
+            <div class="option-card">
+                <label>
                     <input type="checkbox" id="enableImpositionCheckbox">
                     <span>🖨️ 一頁多張／騎馬釘</span>
                 </label>
