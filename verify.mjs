@@ -915,6 +915,129 @@ const blankCounts = (await readPageTexts(page9, blankB64)).map(items => countWat
 check(blankCounts.every(n => n === 0), '空白浮水印文字不會蓋上去', JSON.stringify(blankCounts));
 check(errors9.length === 0, '浮水印流程沒有 pageerror／console error', errors9.slice(0, 2).join(' | '));
 
+// ── 19. 頁碼格式 ──
+// 沿用 page9（3 頁內容已就緒）。先關掉浮水印，避免文字互相干擾判讀。
+await page9.evaluate(() => {
+    document.getElementById('previewModal').close();
+    const wm = document.getElementById('addWatermarkCheckbox'); wm.checked = false; wm.dispatchEvent(new Event('change', { bubbles: true }));
+});
+check(await page9.evaluate(() => document.getElementById('pageNumberSettingsPanel').style.display === 'none'),
+    '未勾選頁碼時不顯示頁碼設定面板');
+await page9.evaluate(() => {
+    const cb = document.getElementById('addPageNumbersCheckbox');
+    cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true }));
+});
+check(await page9.evaluate(() => document.getElementById('pageNumberSettingsPanel').style.display !== 'none'),
+    '勾選頁碼後展開設定面板');
+
+// 預設格式：第 {n} 頁 / 共 {total} 頁。3 頁內容＋1 頁目錄 → total = 4，內容頁碼 2,3,4
+await page9.evaluate(() => {
+    const toc = document.getElementById('addTocCheckbox'); toc.checked = true; toc.dispatchEvent(new Event('change', { bubbles: true }));
+});
+await page9.fill('#pageNumberFormat', '第 {n} 頁 / 共 {total} 頁');
+await page9.selectOption('#pageNumberPosition', 'bottom-right');
+await page9.fill('#pageNumberMargin', '30');
+await page9.fill('#pageNumberSize', '9');
+await page9.click('#generateBtn');
+await page9.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+check(/預覽生成成功/.test(await page9.textContent('#progress')), '帶格式頁碼的生成成功', (await page9.textContent('#progress')).trim());
+
+const pnB64 = await page9.evaluate(async () => {
+    const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return btoa(s);
+});
+const pnDoc = await PDFDocument.load(Buffer.from(pnB64, 'base64'));
+const pnTocPages = pnDoc.getPageCount() - 3;
+const pnTexts = await readPageTexts(page9, pnB64);
+const pnFlat = pnTexts.map(items => items.join('').replace(/\s+/g, ''));
+const pnContent = pnFlat.slice(pnTocPages);
+const expectedPn = ['2', '3', '4'].map(n => `第${n}頁/共${3 + pnTocPages}頁`);
+check(JSON.stringify(pnContent.map(t => (t.match(/第\d+頁\/共\d+頁/) || [''])[0])) === JSON.stringify(expectedPn),
+    '自訂格式「第 {n} 頁 / 共 {total} 頁」每頁都正確（{total} 含目錄頁）',
+    JSON.stringify(pnContent));
+// pdf.js 會把中文與數字拆成不同 item（"第","2","頁"...），所以不能用「有沒有純數字 item」
+// 判斷；改用精確的不變量：同一頁的文字＝原始內文 ＋ 剛好一個自訂格式頁碼，且頁碼在最後。
+const pnBodyAndLabel = pnTexts.slice(pnTocPages).map((items, i) =>
+    items.map(t => t.replace(/\s+/g, '')).join('') === `Chapter${i + 1}Titlebody-A-${i + 1}${expectedPn[i].replace(/\s+/g, '')}`);
+check(pnBodyAndLabel.every(Boolean),
+    '自訂格式取代了原本的純數字頁碼（同一頁只有一個頁碼，且接在內文之後）',
+    JSON.stringify(pnTexts.slice(pnTocPages)));
+
+// 快速套用鈕
+await page9.evaluate(() => document.getElementById('previewModal').close());
+await page9.click('#pageNumberSettingsPanel button:has-text("N/M")');
+check(await page9.inputValue('#pageNumberFormat') === '{n} / {total}', '快速套用「N/M」會改寫格式欄位');
+await page9.click('#pageNumberSettingsPanel button:has-text("純數字")');
+check(await page9.inputValue('#pageNumberFormat') === '{n}', '快速套用「純數字」會改寫格式欄位');
+await page9.click('#pageNumberSettingsPanel button:has-text("第N頁")');
+check(await page9.inputValue('#pageNumberFormat') === '第 {n} 頁 / 共 {total} 頁', '快速套用「第N頁」會改寫格式欄位');
+await page9.click('#pageNumberSettingsPanel button:has-text("純數字")');
+
+// 純數字格式：內容頁只抽得到 n（＝原本的預設行為不能退化）
+await page9.click('#generateBtn');
+await page9.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+const plainB64 = await page9.evaluate(async () => {
+    const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return btoa(s);
+});
+const plainContent = (await readPageTexts(page9, plainB64)).slice(pnTocPages);
+check(plainContent.every((items, i) => items.filter(t => t.trim() === String(i + 2 + pnTocPages - 1 - pnTocPages + 1)).length === 1),
+    '純數字格式每頁恰好一個頁碼', JSON.stringify(plainContent));
+
+// {name} / {date} 變數
+await page9.evaluate(() => document.getElementById('previewModal').close());
+await page9.fill('#pageNumberFormat', '{name} {date}');
+await page9.click('#generateBtn');
+await page9.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+const varB64 = await page9.evaluate(async () => {
+    const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return btoa(s);
+});
+const varContent = (await readPageTexts(page9, varB64)).slice(pnTocPages).map(items => items.join(''));
+check(varContent.every(t => /A\.pdf/.test(t) && /\d{4}-\d{2}-\d{2}/.test(t)),
+    '{name} 與 {date} 變數會代入', JSON.stringify(varContent));
+
+// 位置：左下
+await page9.evaluate(() => document.getElementById('previewModal').close());
+await page9.fill('#pageNumberFormat', 'P{n}');
+await page9.selectOption('#pageNumberPosition', 'bottom-left');
+await page9.fill('#pageNumberMargin', '40');
+await page9.click('#generateBtn');
+await page9.waitForFunction(() => /預覽生成成功|生成失敗/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+const posB64 = await page9.evaluate(async () => {
+    const buf = await (await fetch(document.getElementById('previewFrame').src)).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return btoa(s);
+});
+// 用座標確認位置真的換到左下（pdf.js 的 transform 是 [a,b,c,d,e,f]，e/f 為 x/y）
+const pnPos = await page9.evaluate(async (b64) => {
+    const bin = atob(b64); const data = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+    const doc = await window.pdfjsLib.getDocument({ data }).promise;
+    const page = await doc.getPage(1 + doc.numPages - 3); // 第一頁內容
+    const tc = await page.getTextContent();
+    const vp = page.getViewport({ scale: 1 });
+    const hit = tc.items.find(it => /^P\d+$/.test(it.str));
+    const out = hit ? { x: hit.transform[4], y: hit.transform[5], w: vp.width, h: vp.height } : null;
+    await doc.destroy();
+    return out;
+}, posB64);
+check(!!pnPos && pnPos.x < pnPos.w * 0.35 && pnPos.y < pnPos.h * 0.15,
+    '頁碼位置切到左下（座標驗證）', JSON.stringify(pnPos));
+check(errors9.length === 0, '頁碼格式流程沒有 pageerror／console error', errors9.slice(0, 2).join(' | '));
+
 await browser.close();
 server.close();
 

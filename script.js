@@ -160,6 +160,8 @@ window.onload = function() {
     window.prefillTocFromSource = prefillTocFromSource;
     window.resetTocSettings = resetTocSettings;
     window.resetWatermarkSettings = resetWatermarkSettings;
+    window.resetPageNumberSettings = resetPageNumberSettings;
+    window.applyPageNumberPreset = applyPageNumberPreset;
 
     // PDF 生成與預覽
     window.undo = undo;
@@ -286,6 +288,15 @@ window.onload = function() {
     if (addWatermarkCheckbox) {
         addWatermarkCheckbox.addEventListener('change', function() {
             watermarkSettingsPanel.style.display = this.checked ? 'block' : 'none';
+        });
+    }
+
+    // 頁碼設定面板切換
+    const pageNumberSettingsPanel = document.getElementById('pageNumberSettingsPanel');
+    const addPageNumbersCheckbox = document.getElementById('addPageNumbersCheckbox');
+    if (addPageNumbersCheckbox && pageNumberSettingsPanel) {
+        addPageNumbersCheckbox.addEventListener('change', function() {
+            pageNumberSettingsPanel.style.display = this.checked ? 'block' : 'none';
         });
     }
 
@@ -649,6 +660,74 @@ window.onload = function() {
     }
 
     // ------------------------------------------------------
+    // 頁碼格式
+    // ------------------------------------------------------
+
+    // 預設值集中一處，重設與首次載入都用同一份
+    const PAGE_NUMBER_DEFAULTS = {
+        format: '第 {n} 頁 / 共 {total} 頁',
+        position: 'bottom-right',
+        margin: 30,
+        size: 10,
+    };
+
+    const PAGE_NUMBER_PRESETS = {
+        plain: '{n}',
+        chinese: '第 {n} 頁 / 共 {total} 頁',
+        slash: '{n} / {total}',
+        paren: '- {n} -',
+    };
+
+    function applyPageNumberPreset(key) {
+        const preset = PAGE_NUMBER_PRESETS[key];
+        if (!preset) return;
+        document.getElementById('pageNumberFormat').value = preset;
+        showNotification(`已套用格式：${preset}`, 'success');
+    }
+
+    function resetPageNumberSettings() {
+        document.getElementById('pageNumberFormat').value = PAGE_NUMBER_DEFAULTS.format;
+        document.getElementById('pageNumberPosition').value = PAGE_NUMBER_DEFAULTS.position;
+        document.getElementById('pageNumberMargin').value = PAGE_NUMBER_DEFAULTS.margin;
+        document.getElementById('pageNumberSize').value = PAGE_NUMBER_DEFAULTS.size;
+        showNotification('✅ 頁碼設定已重設', 'success');
+    }
+
+    function readPageNumberConfig() {
+        const preset = PAGE_NUMBER_PRESETS.plain;
+        const raw = document.getElementById('pageNumberFormat').value;
+        return {
+            // 格式空白時退回「純數字」，總比什麼都不印好
+            format: (typeof raw === 'string' && raw.trim()) ? raw : preset,
+            position: document.getElementById('pageNumberPosition').value || PAGE_NUMBER_DEFAULTS.position,
+            margin: clampNumber(document.getElementById('pageNumberMargin').value, 8, 120, PAGE_NUMBER_DEFAULTS.margin),
+            size: clampNumber(document.getElementById('pageNumberSize').value, 6, 36, PAGE_NUMBER_DEFAULTS.size),
+        };
+    }
+
+    // {n} 目前頁碼、{total} 總頁數、{name} 來源檔名、{date} 日期。
+    // 其他大括號內容原樣保留（例如想印「{附件}」不會被吃掉）。
+    function formatPageNumber(template, values) {
+        return String(template).replace(/\{(n|total|name|date)\}/g, (match, key) => {
+            const v = values[key];
+            return (v === undefined || v === null) ? match : String(v);
+        });
+    }
+
+    function pageNumberPositionXY(position, pageWidth, pageHeight, textWidth, margin) {
+        const vertical = String(position || '').startsWith('top') ? 'top' : 'bottom';
+        let horizontal = 'right';
+        if (position === 'bottom-center' || position === 'top-center') horizontal = 'center';
+        else if (position === 'bottom-left' || position === 'top-left') horizontal = 'left';
+
+        let x = pageWidth - margin - textWidth;
+        if (horizontal === 'center') x = (pageWidth - textWidth) / 2;
+        else if (horizontal === 'left') x = margin;
+        const y = vertical === 'top' ? pageHeight - margin : margin;
+        return { x: Math.max(0, x), y: Math.max(0, y) };
+    }
+
+    // ------------------------------------------------------
     // 浮水印／印章
     // ------------------------------------------------------
 
@@ -987,6 +1066,10 @@ window.onload = function() {
                 addToc: addTocCheckbox.checked,
                 addBookmarks: !!(document.getElementById('addBookmarksCheckbox') || {}).checked,
                 addPageNumbers: document.getElementById('addPageNumbersCheckbox').checked,
+                pageNumberFormat: document.getElementById('pageNumberFormat').value,
+                pageNumberPosition: document.getElementById('pageNumberPosition').value,
+                pageNumberMargin: document.getElementById('pageNumberMargin').value,
+                pageNumberSize: document.getElementById('pageNumberSize').value,
                 addWatermark: !!(document.getElementById('addWatermarkCheckbox') || {}).checked,
                 watermarkText: document.getElementById('watermarkText').value,
                 watermarkLayout: document.getElementById('watermarkLayout').value,
@@ -1086,6 +1169,9 @@ window.onload = function() {
                 tocSettingsPanel.style.display = addTocCheckbox.checked ? 'block' : 'none';
                 const bmBox = document.getElementById('addBookmarksCheckbox');
                 if (bmBox) bmBox.checked = !!payload.tocSettings.addBookmarks;
+                if (pageNumberSettingsPanel) {
+                    pageNumberSettingsPanel.style.display = document.getElementById('addPageNumbersCheckbox').checked ? 'block' : 'none';
+                }
                 const wmBox = document.getElementById('addWatermarkCheckbox');
                 if (wmBox) {
                     wmBox.checked = !!payload.tocSettings.addWatermark;
@@ -1096,6 +1182,10 @@ window.onload = function() {
                     const el = document.getElementById(id);
                     if (el) el.value = value;
                 };
+                setVal('pageNumberFormat', payload.tocSettings.pageNumberFormat);
+                setVal('pageNumberPosition', payload.tocSettings.pageNumberPosition);
+                setVal('pageNumberMargin', payload.tocSettings.pageNumberMargin);
+                setVal('pageNumberSize', payload.tocSettings.pageNumberSize);
                 setVal('watermarkText', payload.tocSettings.watermarkText);
                 setVal('watermarkLayout', payload.tocSettings.watermarkLayout);
                 setVal('watermarkColor', payload.tocSettings.watermarkColor);
@@ -2587,13 +2677,28 @@ window.onload = function() {
             // 實測兩種寫法抽出的文字都正確，但統一路徑可避免只有某些檢視器／字型版本才踩到
             // CJK 子集化的 glyph 對映問題。
             if (addPageNumbers) {
-                contentEntries.forEach(({ page }, index) => {
+                const pnConfig = readPageNumberConfig();
+                const totalPages = contentEntries.length + tocPageCount;
+                const today = new Date();
+                const pad2 = (n) => String(n).padStart(2, '0');
+                const dateText = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-${pad2(today.getDate())}`;
+                contentEntries.forEach(({ page, item }, index) => {
                     const { width, height } = page.getSize();
-                    if (width > 0 && height > 0) {
-                        page.drawText(`${index + 1 + tocPageCount}`, {
-                            x: width - 40, y: 30,
-                            size: 10, font: asciiFont, color: rgb(0, 0, 0)
-                        });
+                    if (!(width > 0 && height > 0)) return;
+                    const label = formatPageNumber(pnConfig.format, {
+                        n: index + 1 + tocPageCount,
+                        // {total} 含目錄頁：使用者看到的實體總頁數
+                        total: totalPages,
+                        name: item.fileName || '',
+                        date: dateText,
+                    });
+                    const textWidth = watermarkTextWidth(label, pnConfig.size, cjkFont, asciiFont);
+                    const { x, y } = pageNumberPositionXY(pnConfig.position, width, height, textWidth, pnConfig.margin);
+                    try {
+                        drawMixedText(page, label, x, y, pnConfig.size, cjkFont, asciiFont, rgb(0, 0, 0),
+                            { cjkFontAvailable });
+                    } catch (pnError) {
+                        console.error('頁碼繪製失敗：', pnError);
                     }
                 });
             }

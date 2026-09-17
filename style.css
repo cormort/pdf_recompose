@@ -722,6 +722,10 @@ input[type="file"] { display: none; }
     transition: background .2s var(--ease);
 }
 .toc-reset-btn:hover { background: var(--dark-3); }
+/* 快速套用是次要動作，跟主按鈕區隔開來 */
+button.toc-reset-btn.toc-preset-btn { margin: 0; height: 28px; padding: 0 8px; font-size: 11px; white-space: nowrap; }
+/* 四個快速套用要擠在同一列 */
+.toc-field .toc-input-row { flex-wrap: wrap; }
 
 .modal-hint { font-size: 13px; color: var(--default-500); }
 .ask-input {

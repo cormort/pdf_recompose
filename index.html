@@ -132,6 +132,64 @@
                     <input type="checkbox" id="addPageNumbersCheckbox">
                     <span>#️⃣ 新增頁碼</span>
                 </label>
+                <p class="option-hint">可用變數：<code>{n}</code> 目前頁碼、<code>{total}</code> 總頁數、<code>{name}</code> 檔名、<code>{date}</code> 日期。</p>
+
+                <div id="pageNumberSettingsPanel" class="toc-settings" style="display: none;">
+                    <div class="toc-settings-title">⚙️ 頁碼設定</div>
+
+                    <div class="toc-settings-grid">
+                        <div class="toc-field toc-field-full">
+                            <label>格式</label>
+                            <div class="toc-input-row">
+                                <input type="text" id="pageNumberFormat" class="toc-input toc-input-wide" value="第 {n} 頁 / 共 {total} 頁" maxlength="60">
+                            </div>
+                        </div>
+
+                        <div class="toc-field toc-field-full">
+                            <label>快速套用</label>
+                            <div class="toc-input-row">
+                                <button type="button" class="toc-reset-btn toc-preset-btn" onclick="applyPageNumberPreset('plain')" title="只印頁碼數字">純數字</button>
+                                <button type="button" class="toc-reset-btn toc-preset-btn" onclick="applyPageNumberPreset('chinese')" title="第 {n} 頁 / 共 {total} 頁">第N頁</button>
+                                <button type="button" class="toc-reset-btn toc-preset-btn" onclick="applyPageNumberPreset('slash')" title="{n} / {total}">N/M</button>
+                                <button type="button" class="toc-reset-btn toc-preset-btn" onclick="applyPageNumberPreset('paren')" title="- {n} -">-N-</button>
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>位置</label>
+                            <div class="toc-input-row">
+                                <select id="pageNumberPosition" class="toc-input">
+                                    <option value="bottom-right">右下</option>
+                                    <option value="bottom-center">正下</option>
+                                    <option value="bottom-left">左下</option>
+                                    <option value="top-right">右上</option>
+                                    <option value="top-center">正上</option>
+                                    <option value="top-left">左上</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>邊距</label>
+                            <div class="toc-input-row">
+                                <input type="number" id="pageNumberMargin" class="toc-input" min="8" max="120" value="30">
+                                <span class="toc-unit">pt</span>
+                            </div>
+                        </div>
+
+                        <div class="toc-field">
+                            <label>字級</label>
+                            <div class="toc-input-row">
+                                <input type="number" id="pageNumberSize" class="toc-input" min="6" max="36" value="10">
+                                <span class="toc-unit">pt</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button onclick="resetPageNumberSettings()" class="toc-reset-btn">
+                        🔄 重設為預設值
+                    </button>
+                </div>
             </div>
 
             <div class="option-card">
