@@ -157,6 +157,7 @@ window.onload = function() {
     window.removeSelectedPage = removeSelectedPage;
     window.clearSelectedPages = clearSelectedPages;
     window.addSectionDivider = addSectionDivider;
+    window.insertBlankPage = insertBlankPage;
 
     // 目錄與設定
     window.openTocEditor = openTocEditor;
@@ -1012,7 +1013,7 @@ window.onload = function() {
             // 這種情況直接跳過，避免裁到不該裁的位置。
             const addedRotation = item.rotation || 0;
             if (cb && ((rotate - addedRotation) % 360 + 360) % 360 === 0) {
-                box = viewBoxToPageBox(cb, rotate, width, height);
+                box = viewBoxToPageBox(cb, rotate - addedRotation, width, height); // 邊界是在原始 /Rotate 下量的
             }
         } else if (config.fit === 'inset') {
             const m = config.margin;
@@ -1244,6 +1245,11 @@ window.onload = function() {
         const entries = [];
 
         for (const item of sectionItems) {
+            if (item.type === 'blank') {
+                const prev = entries[entries.length - 1];
+                entries.push({ item, page: addBlankPdfPage(out, prev && prev.page, item.rotation) });
+                continue;
+            }
             const sourceFile = pdfFiles[item.fileIndex];
             if (!sourceFile || !sourceFile.file || !item.pageNum) continue;
             try {
@@ -1849,7 +1855,9 @@ window.onload = function() {
         if (sessionSaveTimer) { clearTimeout(sessionSaveTimer); sessionSaveTimer = null; }
         sessionSavePending = false;
         if (sessionSavePromise) { try { await sessionSavePromise; } catch (e) {} }
-        return idbDelete(SESSION_KEY).catch(() => {});
+        await idbDelete(SESSION_KEY).catch(() => {});
+        // 刪除落地後才恢復自動保存，之後的新編輯照常保存
+        sessionEnabled = true;
     }
 
     // 立即寫入（測試與 beforeunload 用）。成功回傳 true。
@@ -1910,6 +1918,8 @@ window.onload = function() {
         try {
             // 用既有的載入流程重建縮圖，再套回編排
             await handleFiles(fileList);
+            // 有檔案沒載回來時 fileIndex 會錯位，套用編排只會對到錯的頁
+            if (pdfFiles.length !== payload.files.length) throw new Error('部分檔案無法重新載入');
             payload.files.forEach((f, index) => {
                 if (pdfFiles[index]) pdfFiles[index].outline = f.outline || [];
             });
@@ -2453,27 +2463,27 @@ window.onload = function() {
 
         if (!await askConfirm("確定要從來源列表中刪除選取的頁面嗎？")) return;
 
-        const newPdfFiles = [];
-        const indexMap = new Map(); // 舊 fileIndex -> 新 fileIndex（整檔刪除時右側索引須重排）
-        pdfFiles.forEach((file, oldIndex) => {
-            const remainingPages = file.pages.filter(p => {
-                if (p.isChecked) {
-                    deletedCount++;
-                    return false;
-                }
-                return true;
-            });
-            if (remainingPages.length > 0) {
-                file.pages = remainingPages;
-                indexMap.set(oldIndex, newPdfFiles.length);
-                newPdfFiles.push(file);
-            }
-        });
-
         applyEdit('刪除來源頁面', () => {
+            // 必須在 applyEdit 裡才改資料：快照在 fn 之前拍，先改就無法復原
+            const newPdfFiles = [];
+            const indexMap = new Map(); // 舊 fileIndex -> 新 fileIndex（整檔刪除時右側索引須重排）
+            pdfFiles.forEach((file, oldIndex) => {
+                const remainingPages = file.pages.filter(p => {
+                    if (p.isChecked) {
+                        deletedCount++;
+                        return false;
+                    }
+                    return true;
+                });
+                if (remainingPages.length > 0) {
+                    file.pages = remainingPages;
+                    indexMap.set(oldIndex, newPdfFiles.length);
+                    newPdfFiles.push(file);
+                }
+            });
             pdfFiles = newPdfFiles;
-            selectedPages = selectedPages.filter(p => p.type === 'divider' || indexMap.has(p.fileIndex));
-            selectedPages.forEach(p => { if (p.type !== 'divider') p.fileIndex = indexMap.get(p.fileIndex); });
+            selectedPages = selectedPages.filter(p => p.type === 'divider' || p.type === 'blank' || indexMap.has(p.fileIndex));
+            selectedPages.forEach(p => { if (p.type === 'page') p.fileIndex = indexMap.get(p.fileIndex); });
             // 來源被刪光的小節標題會變成孤兒（後面沒有內容頁），留著只會讓目錄多出空章節。
             selectedPages = pruneOrphanDividers(selectedPages);
             document.getElementById('selectAllSource').checked = false;
@@ -2482,28 +2492,22 @@ window.onload = function() {
     }
 
     function batchRotateSource(deg) {
+        if (!pdfFiles.some(file => file.pages.some(p => p.isChecked))) {
+            showNotification('⚠️ 請先勾選要旋轉的頁面 (左側來源)', 'info');
+            return;
+        }
         let rotatedCount = 0;
-        let hasSelection = false;
-
-        pdfFiles.forEach(file => {
-            file.pages.forEach(page => {
-                if (page.isChecked) {
-                    hasSelection = true;
-                    if (typeof page.sourceRotation === 'undefined') page.sourceRotation = 0;
-                    const current = page.sourceRotation;
-                    page.sourceRotation = (current + deg + 360) % 360;
+        applyEdit('旋轉來源頁面', () => {
+            pdfFiles.forEach(file => {
+                file.pages.forEach(page => {
+                    if (!page.isChecked) return;
+                    page.sourceRotation = ((page.sourceRotation || 0) + deg + 360) % 360;
                     rotatedCount++;
-                }
+                });
             });
         });
-
-        if (rotatedCount > 0) {
-            applyEdit('旋轉來源頁面', () => {});
-            applySourceRotationDom();
-            showNotification(`↻ 已旋轉 ${rotatedCount} 個頁面`, 'success');
-        } else {
-            if (!hasSelection) showNotification('⚠️ 請先勾選要旋轉的頁面 (左側來源)', 'info');
-        }
+        applySourceRotationDom();
+        showNotification(`↻ 已旋轉 ${rotatedCount} 個頁面`, 'success');
     }
 
     // --- 快速選取 (Source) ---
@@ -2671,8 +2675,10 @@ window.onload = function() {
             }
 
             // 一般頁面
-            const title = esc(item.firstLine || `Page ${item.pageNum || '?'}`);
-            const source = esc(`${item.fileName || 'Unknown File'} - 第 ${item.pageNum || '?'} 頁`);
+            const isBlank = item.type === 'blank';
+            const title = esc(item.firstLine || (isBlank ? '空白頁' : `Page ${item.pageNum || '?'}`));
+            const source = isBlank ? '插入的空白頁' : esc(`${item.fileName || 'Unknown File'} - 第 ${item.pageNum || '?'} 頁`);
+            const fallbackText = isBlank ? '空白頁' : '無法預覽';
             const checkedAttr = item.isChecked ? 'checked' : '';
             const checkedClass = item.isChecked ? 'checked' : '';
             const rotationStyle = `transform: rotate(${item.rotation || 0}deg);`;
@@ -2685,7 +2691,7 @@ window.onload = function() {
                     <div class="canvas-wrapper">
                         ${item.thumb
                             ? `<img class="page-thumb-img" src="${item.thumb}" alt="第 ${index + 1} 張縮圖" loading="lazy" decoding="async" style="${rotationStyle}">`
-                            : `<div class="thumb-fallback" style="${rotationStyle}">無法預覽</div>`}
+                            : `<div class="thumb-fallback" style="${rotationStyle}">${fallbackText}</div>`}
                     </div>
                     <div class="page-info-grid">
                         <div class="page-num-badge">${index + 1}</div>
@@ -2701,7 +2707,7 @@ window.onload = function() {
                     <div class="list-thumb-wrapper">
                         ${item.thumb
                             ? `<img class="page-thumb-img" src="${item.thumb}" alt="第 ${index + 1} 張縮圖" loading="lazy" decoding="async" style="${rotationStyle}">`
-                            : `<div class="thumb-fallback" style="${rotationStyle}">無法預覽</div>`}
+                            : `<div class="thumb-fallback" style="${rotationStyle}">${fallbackText}</div>`}
                     </div>
                     <div class="selected-page-info">
                         <div class="selected-page-title">${index + 1}. ${title}</div>
@@ -2845,6 +2851,26 @@ window.onload = function() {
                 });
             });
         }
+    }
+
+    // 空白頁：插在最後一個勾選的頁面之後，沒有勾選就加在最後。
+    // firstLine 留空，才不會被當成目錄／書籤項目。
+    function insertBlankPage() {
+        let at = selectedPages.length;
+        for (let i = selectedPages.length - 1; i >= 0; i--) {
+            if (selectedPages[i] && selectedPages[i].isChecked) { at = i + 1; break; }
+        }
+        applyEdit('插入空白頁', () => {
+            selectedPages.splice(at, 0, { type: 'blank', firstLine: null, thumb: null, rotation: 0 });
+        });
+    }
+
+    // 空白頁的尺寸跟前一頁一樣，沒有前一頁就用 A4
+    function addBlankPdfPage(doc, prevPage, rotation) {
+        const size = prevPage ? [prevPage.getWidth(), prevPage.getHeight()] : [595.28, 841.89];
+        const page = doc.addPage(size);
+        page.setRotation(PDFLib.degrees(rotation || 0));
+        return page;
     }
 
     // ======================================================
@@ -3257,6 +3283,11 @@ window.onload = function() {
                 if (!item || item.type === 'divider') continue;
                 pageCounterForContent++;
                 progress.textContent = `正在合併頁面 (${pageCounterForContent}/${pageItems.length})...`;
+                if (item.type === 'blank') {
+                    const prev = contentEntries[contentEntries.length - 1];
+                    contentEntries.push({ item, page: addBlankPdfPage(newPdf, prev && prev.page, item.rotation) });
+                    continue;
+                }
 
                 if (item.fileIndex === undefined || item.fileIndex === null || !pdfFiles[item.fileIndex] || !pdfFiles[item.fileIndex].file || !item.pageNum) {
                     console.error("Missing data for page item:", item);
@@ -3396,7 +3427,7 @@ window.onload = function() {
                 let totalTocPages = 1;
                 for (const item of tocItems) {
                     if (simY < 50) { totalTocPages++; simY = 595 - 90; }
-                    simY -= (item.type === 'divider') ? 35 : TOC_CONFIG.LINE_HEIGHT;
+                    simY -= (item.kind === 'divider') ? 35 : TOC_CONFIG.LINE_HEIGHT;
                 }
 
                 // 內容頁已經先合併進文件，目錄頁必須插到最前面（不能 addPage，那會排到最後）。
@@ -3700,6 +3731,9 @@ window.onload = function() {
                     showNotification(`✅ 已產生 ${zipped.length} 個檔案（ZIP）`, 'success');
                 }
                 finalPdfBytes = await newPdf.save();
+                progress.textContent = zipped.length > 0 ? '✅ 拆檔完成！' : '❌ 拆檔失敗';
+                progress.classList.add(zipped.length > 0 ? 'success' : 'error');
+                setTimeout(() => progress.classList.remove('active', 'success', 'error'), 5000);
                 return; // 拆檔模式下不再走預覽流程
             }
 

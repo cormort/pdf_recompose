@@ -400,7 +400,9 @@ body {
     gap: 6px;
 }
 
-.batch-btn-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+/* 各組靠左排、換行時整齊對齊；分隔線換行後會落在行首，改用組間距取代 */
+.batch-btn-row { display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap; min-width: 0; }
+.batch-btn-row .toolbar-separator { display: none; }
 .batch-btn-group { display: flex; gap: 4px; flex-wrap: wrap; }
 
 .toolbar-separator {
