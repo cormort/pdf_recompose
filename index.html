@@ -95,6 +95,8 @@
 </script>
 </head>
 <body>
+    <button type="button" class="sidebar-collapse-btn" onclick="try { localStorage.setItem('sidebarCollapsed', document.body.classList.toggle('sidebar-collapsed') ? '1' : '') } catch (e) {}" title="收合／展開側邊欄" aria-label="收合／展開側邊欄">☰</button>
+    <script>try { if (localStorage.getItem('sidebarCollapsed')) document.body.classList.add('sidebar-collapsed') } catch (e) {}</script>
     <div class="sidebar">
         <h2>📄 PDF 頁面重組工具</h2>
 

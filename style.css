@@ -110,6 +110,8 @@ body {
     position: relative;
     border-right: 1px solid var(--dark-2);
 }
+/* 子項不壓縮，超出高度時由整個側邊欄捲動 */
+.sidebar > * { flex-shrink: 0; }
 
 .sidebar h2 {
     font-size: 17px;
@@ -174,7 +176,7 @@ body {
     gap: 10px;
 }
 
-.panel-controls { display: flex; gap: 8px; align-items: center; }
+.panel-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
 /* =========================================
    2. 通用元件
@@ -351,6 +353,7 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
     margin-bottom: 8px;
 }
 
@@ -397,8 +400,8 @@ body {
     gap: 6px;
 }
 
-.batch-btn-row { display: flex; align-items: center; gap: 6px; }
-.batch-btn-group { display: flex; gap: 4px; }
+.batch-btn-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.batch-btn-group { display: flex; gap: 4px; flex-wrap: wrap; }
 
 .toolbar-separator {
     width: 1px;
@@ -639,30 +642,12 @@ input[type="file"] { display: none; }
    7. 側邊欄動作區與選項卡
    ========================================= */
 .sidebar-actions {
-    position: sticky;
-    bottom: 0;
     background: var(--dark-bg);
     padding: 12px 0 4px;
     display: flex;
     flex-direction: column;
     gap: 10px;
-    z-index: 5;
-    /* 自己捲動，而不是把上傳區與檔案清單推出畫面。
-       扣掉標題、上傳區、檔案清單與提示的大約高度。 */
-    max-height: calc(100vh - 260px);
-    overflow-y: auto;
-    overscroll-behavior: contain;
 }
-.sidebar-actions.is-overflowing:not(.at-top) {
-    /* 內容被截斷時在上緣補一條髮絲線，提示「上面還有」 */
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14);
-}
-.sidebar-actions::-webkit-scrollbar { width: 8px; }
-.sidebar-actions::-webkit-scrollbar-thumb {
-    background: var(--dark-3);
-    border-radius: 4px;
-}
-.sidebar-actions::-webkit-scrollbar-track { background: transparent; }
 
 /* 輸出設定收合鈕 */
 .settings-toggle {
@@ -685,7 +670,6 @@ input[type="file"] { display: none; }
 .settings-toggle-text { flex: 1; text-align: left; }
 .settings-toggle-chevron { transition: transform .2s var(--ease); }
 body.settings-collapsed .settings-toggle-chevron { transform: rotate(-90deg); }
-body.settings-collapsed .sidebar-actions { max-height: none; overflow: visible; }
 body.settings-collapsed .sidebar-actions .option-card:not(.keep-visible) { display: none; }
 
 /* HeroUI Card（暗色） */
@@ -873,10 +857,25 @@ dialog.modal-content::backdrop { background: rgba(0,0,0,.5); backdrop-filter: bl
         border-bottom: 1px solid var(--dark-2);
         max-height: none;
     }
-    .sidebar-actions { position: static; }
     .main-content { flex-direction: column; gap: 0; overflow: visible; }
     .panel-resizer { display: none; }
     .source-panel, .target-panel { min-height: 60vh; }
     #sourcePages, #selectedPages { max-height: 70vh; }
     .qs-select { max-width: none; }
+}
+
+/* 整個側邊欄收合 */
+.sidebar-collapse-btn {
+    position: fixed; top: 12px; left: 272px; z-index: 20;
+    width: 32px; height: 32px; border: 1px solid var(--dark-3); border-radius: var(--radius-sm);
+    background: var(--dark-2); color: var(--dark-fg); cursor: pointer; font-size: 15px;
+}
+.sidebar-collapse-btn:hover { background: var(--dark-3); }
+body.sidebar-collapsed .sidebar { display: none; }
+body.sidebar-collapsed .sidebar-collapse-btn { left: 12px; }
+body.sidebar-collapsed .main-content { padding-left: 56px; }
+@media (max-width: 900px) {
+    .sidebar-collapse-btn { position: absolute; left: auto; right: 12px; }
+    body.sidebar-collapsed .sidebar-collapse-btn { left: auto; }
+    body.sidebar-collapsed .main-content { padding-left: 16px; padding-top: 56px; }
 }
