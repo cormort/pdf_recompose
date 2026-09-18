@@ -410,8 +410,7 @@ window.onload = function() {
             const onMove = (ev) => {
                 const rect = sourcePanel.parentElement.getBoundingClientRect();
                 const ratio = Math.min(0.8, Math.max(0.2, (ev.clientX - rect.left) / rect.width));
-                sourcePanel.style.flex = `${ratio}`;
-                document.getElementById('targetPanel').style.flex = `${1 - ratio}`;
+                sourcePanel.parentElement.style.gridTemplateColumns = `minmax(0, ${ratio}fr) 6px minmax(0, ${1 - ratio}fr)`;
             };
             const onUp = () => {
                 resizer.classList.remove('dragging');

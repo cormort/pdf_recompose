@@ -124,8 +124,11 @@ body {
 /* 主內容區 */
 .main-content {
     flex: 1;
-    display: flex;
-    gap: 16px;
+    /* 左右面板共用同一組列（subgrid），標題／智慧勾選／批次工具列／頁面清單的起點才會對齊 */
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 6px minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    column-gap: 16px;
     padding: 16px;
     overflow: hidden;
 }
@@ -138,8 +141,9 @@ body {
     border: 1px solid var(--default-200);
     border-radius: var(--radius-lg);
     padding: 16px;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-row: 1 / -1;
+    grid-template-rows: subgrid;
     overflow: hidden;
     box-shadow: var(--shadow-sm);
 }
@@ -153,6 +157,7 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 
 .panel-resizer {
+    grid-row: 1 / -1;
     width: 6px;
     flex-shrink: 0;
     cursor: col-resize;
@@ -859,7 +864,8 @@ dialog.modal-content::backdrop { background: rgba(0,0,0,.5); backdrop-filter: bl
         border-bottom: 1px solid var(--dark-2);
         max-height: none;
     }
-    .main-content { flex-direction: column; gap: 0; overflow: visible; }
+    .main-content { display: flex; flex-direction: column; gap: 0; overflow: visible; }
+    .source-panel, .target-panel { display: flex; flex-direction: column; }
     .panel-resizer { display: none; }
     .source-panel, .target-panel { min-height: 60vh; }
     #sourcePages, #selectedPages { max-height: 70vh; }
