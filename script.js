@@ -1375,7 +1375,8 @@ window.onload = function() {
     async function buildImposition(pdfDoc, contentEntries, config, ctx) {
         const { rgb, PDFDocument } = ctx;
         const n = config.n;
-        const { cols, rows } = gridForNUp(n);
+        // 騎馬釘固定每面 2 格（buildSaddleOrder 的頁序就是以每面 2 頁排的）
+        const { cols, rows } = config.saddle ? { cols: 2, rows: 1 } : gridForNUp(n);
 
         // 把要拼版的頁面先複製到一個「暫存文件」，之後一律從那裡 embedPage。
         // 原因：pdf-lib 的 removePage() 會把同文件內已建立的 XObject 內容一起清掉
@@ -1408,29 +1409,23 @@ window.onload = function() {
 
         // 補到每張紙剛好的格數
         while (slots.length % cellsPerSheet !== 0) slots.push(-1);
-        // 騎馬釘時 buildSaddleOrder 已經給「每一格該放第幾頁」，一張紙佔 2 面 × 每面格數；
-        // 非騎馬釘時 slots 是「每頁一次」，換算成一張紙的格數即可。
-        const sheetCount = config.saddle
-            ? slots.length / cellsPerSheet
-            : Math.ceil(slots.length / cellsPerSheet);
 
         const originals = contentEntries.map(e => e.page);
         const sheetEntries = [];
 
-        for (let s = 0; s < sheetCount; s++) {
-            const first = originals[0];
-            const baseSize = config.sheetSize || (first ? [first.getSize().width, first.getSize().height] : [595.28, 841.89]);
-            const [sw, sh] = baseSize;
-            const cellW = sw / cols;
-            const cellH = sh / rows;
-            const sheet = pdfDoc.addPage([sw, sh]);
+        // 每一「面」輸出成一頁 PDF。騎馬釘一張紙有正反兩面，雙面列印後對折；
+        // 其他模式一張紙只有一面。slots 已按「第 1 面、第 2 面...」依序排好。
+        const first = originals[0];
+        const [sw, sh] = config.sheetSize || (first ? [first.getSize().width, first.getSize().height] : [595.28, 841.89]);
+        const cellW = sw / cols;
+        const cellH = sh / rows;
+        const faceCount = slots.length / cellsPerSide;
 
+        for (let f = 0; f < faceCount; f++) {
+            const sheet = pdfDoc.addPage([sw, sh]);
+            let representative = null;
             for (let k = 0; k < cellsPerSide; k++) {
-                // 騎馬釘時每一張紙要輸出「正面」與「背面」兩頁（雙面列印後對折），
-                // 所以每面各畫一次；其他拼版模式只有一面。
-                const sides = config.saddle ? [0, 1] : [0];
-                for (const side of sides) {
-                const entryIndex = slots[s * cellsPerSheet + side * cellsPerSide + k];
+                const entryIndex = slots[f * cellsPerSide + k];
                 // 依排列方向決定這一格在哪一欄哪一列
                 const col = config.order === 'column' ? Math.floor(k / rows) : (k % cols);
                 const row = config.order === 'column' ? (k % rows) : Math.floor(k / cols);
@@ -1445,10 +1440,18 @@ window.onload = function() {
                 }
                 if (entryIndex < 0 || entryIndex >= copied.length) continue; // 留白
 
+                // 這一面第一個真的有頁面的項目當代表（大綱／頁碼會用到它的標題），
+                // 並記下每個原始頁落在第幾頁，目錄／書籤／頁碼要用它對回拼版後的頁
+                const entry = contentEntries[entryIndex];
+                if (!representative) representative = entry.item;
+                if (entry.sheetIndex === undefined) entry.sheetIndex = sheetEntries.length;
+
                 const sourcePage = copied[entryIndex];
                 if (!sourcePage || typeof sourcePage.getSize !== 'function') continue;
                 const size = sourcePage.getSize();
                 if (!(size.width > 0 && size.height > 0)) continue;
+                // 插入的空白頁沒有內容流，embedPage 會在存檔時才失敗；直接留白格
+                if (!sourcePage.node.Contents()) continue;
                 const embedded = await pdfDoc.embedPage(sourcePage);
                 const scale = Math.min(cellW / size.width, cellH / size.height);
                 const w = size.width * scale, h = size.height * scale;
@@ -1457,15 +1460,8 @@ window.onload = function() {
                     y: cellTop + (cellH - h) / 2,
                     xScale: scale, yScale: scale,
                 });
-                }
             }
-            // 這一張紙上第一個「真的有頁面」的項目，用來當代表（大綱／頁碼會用到它的標題）。
-            // 整張都是補出來的空白頁時，給一個安全的最小物件，避免後面讀 item.pageNum 爆掉。
-            let representative = null;
-            for (let k = 0; k < cellsPerSheet; k++) {
-                const entryIndex = slots[s * cellsPerSheet + k];
-                if (entryIndex >= 0 && contentEntries[entryIndex]) { representative = contentEntries[entryIndex].item; break; }
-            }
+            // 整面都是補出來的空白時，給一個安全的最小物件，避免後面讀 item.pageNum 爆掉
             sheetEntries.push({
                 page: sheet,
                 item: representative || { pageNum: null, fileName: '', firstLine: '' },
@@ -3357,12 +3353,19 @@ window.onload = function() {
             // --- 一頁多張／騎馬釘拼版 ---
             // 放在目錄排版之前：拼版會重建頁面並移除原頁面，之後的目錄超連結、
             // 書籤、頁碼與浮水印都會落在拼版後的紙張上。
+            // itemEntries：每個成品項目一筆；contentEntries：輸出的實體頁（拼版後是紙張）。
+            // sheetIndex 把前者對到後者，目錄頁碼、超連結、書籤與頁碼才不會錯位。
+            const itemEntries = contentEntries;
+            itemEntries.forEach((entry, index) => { entry.sheetIndex = index; });
             if (impositionConfig.enabled && contentEntries.length > 0) {
+                itemEntries.forEach(entry => { entry.sheetIndex = undefined; });
                 progress.textContent = '正在拼版...';
                 try {
                     contentEntries = await buildImposition(newPdf, contentEntries, impositionConfig, { rgb, PDFDocument });
                 } catch (impError) {
                     console.error('拼版失敗，保留原頁面：', impError);
+                    contentEntries = itemEntries;
+                    itemEntries.forEach((entry, index) => { entry.sheetIndex = index; });
                     showNotification('⚠️ 拼版失敗，已保留原頁面。', 'error');
                 }
             }
@@ -3377,8 +3380,9 @@ window.onload = function() {
                     if (!item) continue;
                     if (item.type === 'divider') {
                         outlineEntries.push({ kind: 'divider', title: item.firstLine || 'New Section', level: 0, contentIndex: -1 });
-                    } else if (contentIdx < contentEntries.length) {
-                        const contentItem = contentEntries[contentIdx].item;
+                    } else if (contentIdx < itemEntries.length) {
+                        const contentItem = itemEntries[contentIdx].item;
+                        const sheetIndex = itemEntries[contentIdx].sheetIndex;
                         const autoTitle = `Page ${contentItem.pageNum || '?'}`;
                         const title = contentItem.firstLine || autoTitle;
                         // 有自訂標題（來自目錄編輯或來源書籤）才算一個大綱節點
@@ -3387,7 +3391,7 @@ window.onload = function() {
                                 kind: 'page',
                                 title,
                                 level: 1 + (contentItem.level || 0),
-                                contentIndex: contentIdx,
+                                contentIndex: sheetIndex === undefined ? -1 : sheetIndex,
                             });
                         }
                         contentIdx++;
@@ -3550,13 +3554,25 @@ window.onload = function() {
                 for (const item of selectedPages) {
                     if (!item) continue;
                     if (item.type === 'divider') { section++; continue; }
-                    if (contentIdx >= contentEntries.length) break;
-                    const entry = contentEntries[contentIdx];
+                    if (contentIdx >= itemEntries.length) break;
+                    const entry = itemEntries[contentIdx];
                     entry.restartKey = hasSections ? `s${section}` : 'all';
                     if (item.scheme) inheritedScheme = item.scheme;
                     entry.scheme = inheritedScheme;
                     contentIdx++;
                 }
+            }
+            // 拼版後一張紙沿用它第一個頁面的分節與編號方案
+            if (contentEntries !== itemEntries) {
+                const firstOnSheet = new Map();
+                for (const entry of itemEntries) {
+                    if (entry.sheetIndex !== undefined && !firstOnSheet.has(entry.sheetIndex)) firstOnSheet.set(entry.sheetIndex, entry);
+                }
+                contentEntries.forEach((sheet, index) => {
+                    const first = firstOnSheet.get(index);
+                    sheet.restartKey = first ? first.restartKey : undefined;
+                    sheet.scheme = first ? first.scheme : null;
+                });
             }
             const pageLabels = computePageLabels(contentEntries);
             // 沒有小節時，{n} 維持「含目錄頁位移的實體頁序」
