@@ -22,6 +22,7 @@ import { createRequire } from 'node:module';
 import { runInThisContext } from 'node:vm';
 import { tmpdir } from 'node:os';
 import { join, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 
@@ -64,7 +65,7 @@ try {
     process.exit(2);
 }
 
-const ROOT = new URL('.', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('.', import.meta.url)); // .pathname 在 Windows 會是 /D:/...
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.ttf': 'font/ttf', '.pdf': 'application/pdf' };
 
 let failed = 0;
@@ -412,6 +413,8 @@ const texts = await page.evaluate(async (b64) => {
 const tocText = texts.slice(0, tocPageCount).join(' ');
 check(/目錄/.test(tocText), '目錄頁標題可被抽取（中文字型正常）', tocText.slice(0, 60));
 check(/第一部分/.test(tocText), '小節標題出現在目錄上', tocText.slice(0, 80));
+check(/Chapter \d+ Title/.test(tocText), '英文標題在目錄上保留字間空白', tocText.slice(0, 120));
+check(/第\d+章中文標題/.test(tocText), '中文標題旁的空白照舊拿掉', tocText.slice(0, 120));
 // 目錄上的頁碼與內容頁的頁碼都必須抽得出來。
 // 這份文件的順序是 P P P D P P（補了一張在最後，所以它在小節之後）。
 // 採分節編號後，小節之後的那一頁會重新從 1 起算，所以出現的編號是 1..4，
@@ -1474,7 +1477,7 @@ const fourUpOrder = fourUpCells.map(p => p.cells.map(c => c.join('')).join('|'))
 check(JSON.stringify(fourUpOrder) === JSON.stringify(['P1|P2|P3|P4', 'P5|P6||']),
     '4-up 的格線順序正確，頁數不足時最後一格留白', JSON.stringify(fourUpOrder));
 
-// (c) 騎馬釘：4 頁 → 2 張紙（每張紙正反兩面 = PDF 2 頁）
+// (c) 騎馬釘：4 頁 → 1 張紙，正反兩面各輸出成一頁 PDF
 await loadInto11(fixtureMark4);
 await page11.evaluate(() => {
     document.getElementById('impositionNUpSelect').value = '2';
@@ -1482,16 +1485,12 @@ await page11.evaluate(() => {
     document.getElementById('impositionSaddleCheckbox').checked = true;
 });
 const saddle = await gen11();
-// 4 頁只需要 1 張紙（正面 4|1、背面 2|3）
-check(saddle.ok && saddle.count === 1, '騎馬釘：4 頁排成 1 張紙', JSON.stringify(saddle.sizes || saddle.detail));
-const saddleTexts = saddle.ok ? [(await readPageTexts(page11, saddle.b64)).slice(-1)[0].join('')] : [];
-const saddleSeen = new Set(saddleTexts.join(' ').match(/P\d/g) || []);
-check(saddleTexts.length === 1 && [1, 2, 3, 4].every(n => saddleSeen.has(`P${n}`)),
-    '騎馬釘 4 頁：每一頁都有排進成品',
-    JSON.stringify({ pages: saddleTexts.length, seen: [...saddleSeen] }));
-// 拼版順序用純函式驗證（見下方 pickSaddleOrder 檢查），不再從 PDF 反推
+check(saddle.ok && saddle.count === 2, '騎馬釘：4 頁排成 1 張紙（正反 2 面）', JSON.stringify(saddle.sizes || saddle.detail));
+const saddleOrder = saddle.ok ? (await readCellsByGrid(page11, saddle.b64, 2, 1)).map(p => p.cells.map(c => c.join('')).join('|')) : [];
+check(JSON.stringify(saddleOrder) === JSON.stringify(['P4|P1', 'P2|P3']),
+    '騎馬釘 4 頁：正面 4|1、背面 2|3', JSON.stringify(saddleOrder));
 
-// (d) 騎馬釘：6 頁會補成 8 頁（4 的倍數）
+// (d) 騎馬釘：6 頁會補成 8 頁（4 的倍數）→ 2 張紙、4 面
 await loadInto11(fixtureMark6);
 await page11.evaluate(() => {
     document.getElementById('impositionNUpSelect').value = '2';
@@ -1499,12 +1498,10 @@ await page11.evaluate(() => {
     document.getElementById('impositionSaddleCheckbox').checked = true;
 });
 const saddle6 = await gen11();
-check(saddle6.ok && saddle6.count === 2, '騎馬釘：6 頁補成 8 頁 → 2 張', JSON.stringify(saddle6.sizes || saddle6.detail));
-const saddle6Texts = saddle6.ok ? (await readPageTexts(page11, saddle6.b64)).slice(-2).map(i => i.join('')) : [];
-const seen6 = new Set(saddle6Texts.join(' ').match(/P\d/g) || []);
-check(saddle6Texts.length === 2 && [1, 2, 3, 4, 5, 6].every(n => seen6.has(`P${n}`)),
-    '騎馬釘 6 頁：2 張紙且 6 頁都排進去',
-    JSON.stringify({ pages: saddle6Texts.length, seen: [...seen6] }));
+check(saddle6.ok && saddle6.count === 4, '騎馬釘：6 頁補成 8 頁 → 2 張紙（4 面）', JSON.stringify(saddle6.sizes || saddle6.detail));
+const saddle6Order = saddle6.ok ? (await readCellsByGrid(page11, saddle6.b64, 2, 1)).map(p => p.cells.map(c => c.join('')).join('|')) : [];
+check(JSON.stringify(saddle6Order) === JSON.stringify(['|P1', 'P2|', 'P6|P3', 'P4|P5']),
+    '騎馬釘 6 頁：補的空白頁在 7、8，6 頁都排在正確的面', JSON.stringify(saddle6Order));
 
 // (e) 關掉拼版後恢復原狀
 await loadInto11(fixtureMark6);
